@@ -102,11 +102,17 @@ async def api_research_trends(req: ResearchTrendsRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _filter(dc_class, data: dict) -> dict:
+    """Strip keys not present in a dataclass, so extra frontend-only fields don't crash init."""
+    known = {f.name for f in dc_class.__dataclass_fields__.values()}
+    return {k: v for k, v in data.items() if k in known}
+
+
 @app.post("/api/build-brief")
 async def api_build_brief(req: BuildBriefRequest):
     try:
-        dna = CompanyDNA(**req.dna)
-        trend = TrendItem(**req.trend)
+        dna = CompanyDNA(**_filter(CompanyDNA, req.dna))
+        trend = TrendItem(**_filter(TrendItem, req.trend))
         brief = build_brief(dna, trend, req.angle, article_type=req.article_type)
         return asdict(brief)
     except Exception as e:
@@ -116,9 +122,9 @@ async def api_build_brief(req: BuildBriefRequest):
 @app.post("/api/write-article")
 async def api_write_article(req: WriteArticleRequest):
     try:
-        dna = CompanyDNA(**req.dna)
-        trend = TrendItem(**req.trend)
-        brief = ArticleBrief(**req.brief)
+        dna = CompanyDNA(**_filter(CompanyDNA, req.dna))
+        trend = TrendItem(**_filter(TrendItem, req.trend))
+        brief = ArticleBrief(**_filter(ArticleBrief, req.brief))
         api_key = req.api_key if req.api_key is not None else os.environ.get("GOOGLE_API_KEY", "")
 
         article = await write_article(brief, dna, trend, api_key=api_key, model=req.model)

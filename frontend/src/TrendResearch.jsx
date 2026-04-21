@@ -30,9 +30,11 @@ export default function TrendResearchPage({ dna, trends, onTrendsReady }) {
     let i = 0;
     const iv = setInterval(() => {
       if (i < logSteps.length) {
-        setLog(prev => [...prev, logSteps[i]]);
-        setProgress(Math.round(((i + 1) / logSteps.length) * 80));
+        const step = logSteps[i];          // capture value NOW, before i increments
+        const pct  = Math.round(((i + 1) / logSteps.length) * 80);
         i++;
+        setLog(prev => [...prev, step]);
+        setProgress(pct);
       } else {
         clearInterval(iv);
       }
