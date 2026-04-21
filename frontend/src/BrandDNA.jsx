@@ -13,8 +13,8 @@ const SCRAPE_STEPS = [
   { label: "Building CompanyDNA profile", duration: 450 },
 ];
 
-export default function BrandDNAPage({ dna, onDNAReady }) {
-  const [url, setUrl]         = useState("");
+export default function BrandDNAPage({ dna, onDNAReady, initialUrl }) {
+  const [url, setUrl]         = useState(initialUrl || "");
   const [phase, setPhase]     = useState("idle");
   const [stepIdx, setStepIdx] = useState(0);
   const [stepsDone, setStepsDone] = useState([]);

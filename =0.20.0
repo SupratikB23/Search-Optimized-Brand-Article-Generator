@@ -1,0 +1,6 @@
+WARNING: Ignoring invalid distribution ~treamlit (c:\Users\Supratik\AppData\Local\Programs\Python\Python312\Lib\site-packages)
+WARNING: Ignoring invalid distribution ~treamlit (c:\Users\Supratik\AppData\Local\Programs\Python\Python312\Lib\site-packages)
+WARNING: Ignoring invalid distribution ~treamlit (c:\Users\Supratik\AppData\Local\Programs\Python\Python312\Lib\site-packages)
+
+[notice] A new release of pip is available: 25.3 -> 26.0.1
+[notice] To update, run: python.exe -m pip install --upgrade pip

@@ -20,6 +20,9 @@ test-results/
 output/
 clients/*/output/
 
+# Local SQLite database
+data/
+
 # API keys & secrets
 .env
 backend/.env

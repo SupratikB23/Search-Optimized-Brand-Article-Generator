@@ -47,7 +47,7 @@ export default function ArticleWriterPage({ dna, brief, trend, onArticleReady })
   const activeBrief = brief || {};
   const activeDNA   = dna   || {};
 
-  function startStream(text) {
+  function startStream(text, fullArticle) {
     setStream(""); setDone(false);
     let i = 0;
     timerRef.current = setInterval(() => {
@@ -56,8 +56,14 @@ export default function ArticleWriterPage({ dna, brief, trend, onArticleReady })
         clearInterval(timerRef.current);
         setStream(text); setDone(true); setGen(false);
         const wc = text.split(/\s+/).length;
-        setArticle({ content: text, word_count: wc, seo_title: activeBrief.title?.slice(0, 60) || "", meta_description: (text.split('\n\n')[1] || "").replace(/[#*>]/g,"").slice(0, 157) + "…" });
-        onArticleReady && onArticleReady({ content: text });
+        const articleObj = fullArticle || {
+          content: text,
+          word_count: wc,
+          seo_title: activeBrief.title?.slice(0, 60) || "",
+          meta_description: (text.split('\n\n')[1] || "").replace(/[#*>]/g, "").slice(0, 157) + "…",
+        };
+        setArticle(articleObj);
+        onArticleReady && onArticleReady(articleObj);
       } else {
         setStream(text.slice(0, i));
         if (outRef.current) outRef.current.scrollTop = outRef.current.scrollHeight;
@@ -91,7 +97,7 @@ export default function ArticleWriterPage({ dna, brief, trend, onArticleReady })
           quality_passed: result.quality_passed,
         });
       }
-      startStream(result.content);
+      startStream(result.content, result);
     } catch (e) {
       setError(e.message);
       setGen(false);

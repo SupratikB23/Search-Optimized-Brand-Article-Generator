@@ -1,5 +1,20 @@
 import { useState, useEffect, Component } from 'react';
 import { Badge } from './components';
+import LandingPage      from './Landing';
+import ClientsPage      from './ClientsPage';
+import BrandDNAPage     from './BrandDNA';
+import TrendResearchPage from './TrendResearch';
+import BriefBuilderPage from './BriefBuilder';
+import ArticleWriterPage from './ArticleWriter';
+import {
+  getClient,
+  saveClientDNA,
+  saveClientTrends,
+  saveClientBrief,
+  saveClientArticle,
+} from './api';
+
+// ── Error Boundary ────────────────────────────────────────────────────────────
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -31,11 +46,9 @@ class ErrorBoundary extends Component {
     return this.props.children;
   }
 }
-import LandingPage from './Landing';
-import BrandDNAPage from './BrandDNA';
-import TrendResearchPage from './TrendResearch';
-import BriefBuilderPage from './BriefBuilder';
-import ArticleWriterPage from './ArticleWriter';
+
+
+// ── Sidebar nav ───────────────────────────────────────────────────────────────
 
 const NAV = [
   { id: "dna",    engine: "01", label: "Brand DNA",      desc: "Extract company profile",    icon: "◎" },
@@ -49,15 +62,15 @@ function ThemeToggle({ dark, setDark }) {
     <button onClick={() => setDark(d => !d)} title={dark ? "Switch to Light" : "Switch to Dark"} style={{
       width: 32, height: 32, borderRadius: 8, border: "1px solid var(--border)",
       background: "var(--surface-2)", cursor: "pointer", display: "flex",
-      alignItems: "center", justifyContent: "center", fontSize: 14,
-      transition: "all 0.15s", color: "var(--text-2)",
+      alignItems: "center", justifyContent: "center", fontSize: 14, color: "var(--text-2)",
+      transition: "all 0.15s",
     }}>
       {dark ? "☀" : "☾"}
     </button>
   );
 }
 
-function Sidebar({ active, setActive, completed, dark, setDark }) {
+function Sidebar({ active, setActive, completed, dark, setDark, clientName, onBackToClients }) {
   return (
     <aside style={{
       width: 216, flexShrink: 0, background: "var(--surface)",
@@ -65,21 +78,32 @@ function Sidebar({ active, setActive, completed, dark, setDark }) {
       display: "flex", flexDirection: "column", height: "100vh",
       position: "sticky", top: 0,
     }}>
-      <div style={{ padding: "16px 16px 14px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-          <div style={{
-            width: 28, height: 28, borderRadius: 7,
-            background: "var(--accent)", display: "flex", alignItems: "center",
-            justifyContent: "center", fontSize: 13, fontWeight: 800, color: "#fff",
-          }}>S</div>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", letterSpacing: "-0.02em", lineHeight: 1.1 }}>SearchOS</div>
-            <div style={{ fontSize: 10, color: "var(--text-4)", fontFamily: "var(--font-mono)" }}>v1.0 · Free</div>
+      {/* Logo + client name */}
+      <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: clientName ? 8 : 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+            <div style={{ width: 28, height: 28, borderRadius: 7, background: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 800, color: "#fff" }}>S</div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", letterSpacing: "-0.02em", lineHeight: 1.1 }}>SearchOS</div>
+              <div style={{ fontSize: 10, color: "var(--text-4)", fontFamily: "var(--font-mono)" }}>v1.0 · Free</div>
+            </div>
           </div>
+          <ThemeToggle dark={dark} setDark={setDark} />
         </div>
-        <ThemeToggle dark={dark} setDark={setDark} />
+
+        {clientName && (
+          <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 8 }}>
+            <div style={{ width: 22, height: 22, borderRadius: 6, background: "var(--accent-subtle)", border: "1px solid var(--accent-border)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800, color: "var(--accent)", flexShrink: 0 }}>
+              {clientName[0].toUpperCase()}
+            </div>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {clientName}
+            </span>
+          </div>
+        )}
       </div>
 
+      {/* Nav items */}
       <nav style={{ flex: 1, padding: "10px 10px", display: "flex", flexDirection: "column", gap: 2 }}>
         {NAV.map(item => {
           const isActive = active === item.id;
@@ -113,8 +137,9 @@ function Sidebar({ active, setActive, completed, dark, setDark }) {
         })}
       </nav>
 
-      <div style={{ padding: "14px 16px", borderTop: "1px solid var(--border)" }}>
-        <div style={{ fontSize: 10, color: "var(--text-4)", fontFamily: "var(--font-mono)", letterSpacing: "0.08em", marginBottom: 7 }}>PIPELINE</div>
+      {/* Pipeline progress */}
+      <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)" }}>
+        <div style={{ fontSize: 10, color: "var(--text-4)", fontFamily: "var(--font-mono)", letterSpacing: "0.08em", marginBottom: 6 }}>PIPELINE</div>
         <div style={{ display: "flex", gap: 4, marginBottom: 5 }}>
           {NAV.map(item => (
             <div key={item.id} style={{
@@ -124,13 +149,26 @@ function Sidebar({ active, setActive, completed, dark, setDark }) {
             }} />
           ))}
         </div>
-        <div style={{ fontSize: 10, color: "var(--text-4)" }}>{completed.length} / 4 complete</div>
+        <div style={{ fontSize: 10, color: "var(--text-4)", marginBottom: 8 }}>{completed.length} / 4 complete</div>
+
+        {/* Back to brands */}
+        <button onClick={onBackToClients} style={{
+          width: "100%", background: "none",
+          border: "1px solid var(--border)", borderRadius: 7,
+          padding: "6px 0", fontSize: 11, color: "var(--text-3)",
+          cursor: "pointer", fontFamily: "var(--font-ui)", transition: "all 0.15s",
+        }}
+        onMouseEnter={e => { e.target.style.borderColor = "var(--border-hover)"; e.target.style.color = "var(--text-2)"; }}
+        onMouseLeave={e => { e.target.style.borderColor = "var(--border)"; e.target.style.color = "var(--text-3)"; }}
+        >
+          ← All Brands
+        </button>
       </div>
     </aside>
   );
 }
 
-function TopBar({ page, onHome, dark, setDark }) {
+function TopBar({ page, dark, setDark }) {
   const meta = NAV.find(n => n.id === page);
   return (
     <header style={{
@@ -139,16 +177,7 @@ function TopBar({ page, onHome, dark, setDark }) {
       padding: "0 24px", background: "var(--surface)", flexShrink: 0,
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <button onClick={onHome} style={{
-          background: "none", border: "none", color: "var(--text-3)", cursor: "pointer",
-          fontSize: 12, fontFamily: "var(--font-ui)", padding: "4px 8px",
-          borderRadius: 6, transition: "color 0.12s",
-        }} onMouseEnter={e => e.target.style.color = "var(--text)"}
-           onMouseLeave={e => e.target.style.color = "var(--text-3)"}>
-          ← Home
-        </button>
         {meta && <>
-          <span style={{ color: "var(--border-strong)", fontSize: 14 }}>/</span>
           <span style={{ fontSize: 13, color: "var(--text)", fontWeight: 600 }}>{meta.label}</span>
           <span style={{ fontSize: 12, color: "var(--text-4)" }}>— {meta.desc}</span>
         </>}
@@ -163,15 +192,25 @@ function TopBar({ page, onHome, dark, setDark }) {
   );
 }
 
+
+// ── Root App ──────────────────────────────────────────────────────────────────
+
 export default function App() {
-  const [screen, setScreen]   = useState(() => localStorage.getItem("so_screen") || "landing");
-  const [page, setPage]       = useState(() => localStorage.getItem("so_page")   || "dna");
-  const [dark, setDark]       = useState(() => localStorage.getItem("so_theme") !== "light");
-  const [dna, setDNA]         = useState(null);
-  const [trends, setTrends]   = useState(null);
-  const [brief, setBrief]     = useState(null);
+  // Screens: "landing" | "clients" | "app"
+  const [screen, setScreen]     = useState("landing");
+  const [page,   setPage]       = useState("dna");
+  const [dark,   setDark]       = useState(() => localStorage.getItem("so_theme") !== "light");
+
+  // Active client context
+  const [client, setClient]     = useState(null);   // { id, name, domain, slug, url, ... }
+
+  // Workflow state
+  const [dna,           setDNA]           = useState(null);
+  const [trends,        setTrends]        = useState(null);
+  const [brief,         setBrief]         = useState(null);
+  const [briefDbId,     setBriefDbId]     = useState(null);
   const [selectedTrend, setSelectedTrend] = useState(null);
-  const [article, setArticle] = useState(null);
+  const [article,       setArticle]       = useState(null);
 
   useEffect(() => {
     const r = document.documentElement;
@@ -179,24 +218,159 @@ export default function App() {
     localStorage.setItem("so_theme", dark ? "dark" : "light");
   }, [dark]);
 
-  function gotoPage(id) { setPage(id); localStorage.setItem("so_page", id); }
-  function gotoScreen(s) { setScreen(s); localStorage.setItem("so_screen", s); }
+  // ── Silent save helper ─────────────────────────────────────────────────────
+  function silentSave(promise) {
+    promise.catch(err => console.warn("[SearchOS] Auto-save failed:", err));
+  }
 
-  const completed = [dna && "dna", trends && "trends", brief && "brief", article && "writer"].filter(Boolean);
+  // ── Navigation ─────────────────────────────────────────────────────────────
+  function gotoPage(id)   { setPage(id); }
+  function gotoScreen(s)  { setScreen(s); }
 
-  if (screen === "landing") return <LandingPage onEnter={() => gotoScreen("app")} />;
+  // ── Client selection (existing brand) ─────────────────────────────────────
+  async function handleSelectClient(clientSummary) {
+    setClient(clientSummary);
+    // Clear previous workflow state
+    setDNA(null); setTrends(null); setBrief(null);
+    setBriefDbId(null); setSelectedTrend(null); setArticle(null);
+    gotoScreen("app");
 
+    // Load full data (DNA + latest trends)
+    try {
+      const full = await getClient(clientSummary.id);
+      setClient(full);
+      if (full.dna)           setDNA(full.dna);
+      if (full.latest_trends) setTrends(full.latest_trends);
+      // Jump to the right starting page
+      if (!full.dna)           gotoPage("dna");
+      else if (!full.latest_trends) gotoPage("trends");
+      else                     gotoPage("trends");
+    } catch (err) {
+      console.error("Failed to load client data:", err);
+      gotoPage("dna");
+    }
+  }
+
+  // ── New brand creation ─────────────────────────────────────────────────────
+  function handleNewClient(clientEntry) {
+    setClient(clientEntry);
+    setDNA(null); setTrends(null); setBrief(null);
+    setBriefDbId(null); setSelectedTrend(null); setArticle(null);
+    gotoPage("dna");
+    gotoScreen("app");
+  }
+
+  // ── Engine completion callbacks (save + advance) ───────────────────────────
+
+  function handleDNAReady(d) {
+    setDNA(d);
+    if (client?.id) {
+      silentSave(
+        saveClientDNA(client.id, d).then(updated => {
+          setClient(prev => ({ ...prev, name: updated.name, domain: updated.domain }));
+        })
+      );
+    }
+    setTimeout(() => gotoPage("trends"), 700);
+  }
+
+  function handleTrendsReady(t) {
+    setTrends(t);
+    if (client?.id) {
+      silentSave(saveClientTrends(client.id, t));
+    }
+    gotoPage("brief");
+  }
+
+  function handleBriefReady(b, trend) {
+    setBrief(b);
+    setSelectedTrend(trend);
+    if (client?.id) {
+      silentSave(
+        saveClientBrief(client.id, b).then(id => setBriefDbId(id))
+      );
+    }
+    setTimeout(() => gotoPage("writer"), 400);
+  }
+
+  function handleArticleReady(a) {
+    setArticle(a);
+    if (client?.id) {
+      silentSave(saveClientArticle(client.id, a, briefDbId));
+    }
+  }
+
+  // ── Derived state ──────────────────────────────────────────────────────────
+  const completed = [
+    dna     && "dna",
+    trends  && "trends",
+    brief   && "brief",
+    article && "writer",
+  ].filter(Boolean);
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  if (screen === "landing") {
+    return <LandingPage onEnter={() => gotoScreen("clients")} />;
+  }
+
+  if (screen === "clients") {
+    return (
+      <ClientsPage
+        dark={dark}
+        setDark={setDark}
+        onSelectClient={handleSelectClient}
+        onNewClient={handleNewClient}
+      />
+    );
+  }
+
+  // screen === "app"
   return (
     <div style={{ display: "flex", height: "100vh", background: "var(--bg)", overflow: "hidden" }}>
-      <Sidebar active={page} setActive={gotoPage} completed={completed} dark={dark} setDark={setDark} />
+      <Sidebar
+        active={page}
+        setActive={gotoPage}
+        completed={completed}
+        dark={dark}
+        setDark={setDark}
+        clientName={client?.name || client?.domain || null}
+        onBackToClients={() => gotoScreen("clients")}
+      />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <TopBar page={page} onHome={() => gotoScreen("landing")} dark={dark} setDark={setDark} />
+        <TopBar page={page} dark={dark} setDark={setDark} />
         <main style={{ flex: 1, overflowY: "auto", padding: "28px 32px" }}>
           <ErrorBoundary key={page}>
-            {page === "dna"    && <BrandDNAPage      dna={dna}   onDNAReady={d => { setDNA(d); setTimeout(() => gotoPage("trends"), 700); }} />}
-            {page === "trends" && <TrendResearchPage dna={dna}   trends={trends} onTrendsReady={t => { setTrends(t); gotoPage("brief"); }} />}
-            {page === "brief"  && <BriefBuilderPage  dna={dna}   trends={trends} brief={brief}  onBriefReady={(b, t) => { setBrief(b); setSelectedTrend(t); setTimeout(() => gotoPage("writer"), 400); }} />}
-            {page === "writer" && <ArticleWriterPage dna={dna}   brief={brief}   trend={selectedTrend} onArticleReady={a => setArticle(a)} />}
+            {page === "dna" && (
+              <BrandDNAPage
+                dna={dna}
+                initialUrl={client?.url || ""}
+                onDNAReady={handleDNAReady}
+              />
+            )}
+            {page === "trends" && (
+              <TrendResearchPage
+                dna={dna}
+                trends={trends}
+                onTrendsReady={handleTrendsReady}
+              />
+            )}
+            {page === "brief" && (
+              <BriefBuilderPage
+                dna={dna}
+                trends={trends}
+                brief={brief}
+                onBriefReady={handleBriefReady}
+              />
+            )}
+            {page === "writer" && (
+              <ArticleWriterPage
+                dna={dna}
+                brief={brief}
+                trend={selectedTrend}
+                onArticleReady={handleArticleReady}
+              />
+            )}
           </ErrorBoundary>
         </main>
       </div>
