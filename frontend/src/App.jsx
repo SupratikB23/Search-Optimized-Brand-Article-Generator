@@ -1,5 +1,36 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Component } from 'react';
 import { Badge } from './components';
+
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: "40px 32px" }}>
+          <p style={{ fontSize: 11, fontWeight: 700, color: "var(--red)", fontFamily: "var(--font-mono)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
+            Render Error
+          </p>
+          <p style={{ fontSize: 14, color: "var(--text)", marginBottom: 16 }}>
+            {this.state.error?.message || "An unexpected error occurred."}
+          </p>
+          <button
+            onClick={() => this.setState({ hasError: false, error: null })}
+            style={{ fontSize: 13, padding: "7px 16px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface-2)", color: "var(--text)", cursor: "pointer" }}
+          >
+            Try again
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 import LandingPage from './Landing';
 import BrandDNAPage from './BrandDNA';
 import TrendResearchPage from './TrendResearch';
@@ -161,10 +192,12 @@ export default function App() {
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <TopBar page={page} onHome={() => gotoScreen("landing")} dark={dark} setDark={setDark} />
         <main style={{ flex: 1, overflowY: "auto", padding: "28px 32px" }}>
-          {page === "dna"    && <BrandDNAPage      dna={dna}   onDNAReady={d => { setDNA(d); setTimeout(() => gotoPage("trends"), 700); }} />}
-          {page === "trends" && <TrendResearchPage dna={dna}   trends={trends} onTrendsReady={t => { setTrends(t); setTimeout(() => gotoPage("brief"),  700); }} />}
-          {page === "brief"  && <BriefBuilderPage  dna={dna}   trends={trends} brief={brief}  onBriefReady={(b, t) => { setBrief(b); setSelectedTrend(t); setTimeout(() => gotoPage("writer"), 400); }} />}
-          {page === "writer" && <ArticleWriterPage dna={dna}   brief={brief}   trend={selectedTrend} onArticleReady={a => setArticle(a)} />}
+          <ErrorBoundary key={page}>
+            {page === "dna"    && <BrandDNAPage      dna={dna}   onDNAReady={d => { setDNA(d); setTimeout(() => gotoPage("trends"), 700); }} />}
+            {page === "trends" && <TrendResearchPage dna={dna}   trends={trends} onTrendsReady={t => { setTrends(t); gotoPage("brief"); }} />}
+            {page === "brief"  && <BriefBuilderPage  dna={dna}   trends={trends} brief={brief}  onBriefReady={(b, t) => { setBrief(b); setSelectedTrend(t); setTimeout(() => gotoPage("writer"), 400); }} />}
+            {page === "writer" && <ArticleWriterPage dna={dna}   brief={brief}   trend={selectedTrend} onArticleReady={a => setArticle(a)} />}
+          </ErrorBoundary>
         </main>
       </div>
     </div>

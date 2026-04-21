@@ -80,7 +80,7 @@ export default function BriefBuilderPage({ dna, trends, brief, onBriefReady }) {
               }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
                   <span style={{ fontSize: 12, color: trendIdx === i ? "var(--text)" : "var(--text-2)", lineHeight: 1.4 }}>
-                    {t.title.slice(0, 65)}{t.title.length > 65 ? "…" : ""}
+                    {(t.title || "").slice(0, 65)}{(t.title || "").length > 65 ? "…" : ""}
                   </span>
                   <span style={{ fontSize: 10, color: "var(--accent)", fontFamily: "var(--font-mono)", flexShrink: 0 }}>
                     {Math.round(t.relevance_score * 100)}

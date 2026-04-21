@@ -54,7 +54,6 @@ export default function TrendResearchPage({ dna, trends, onTrendsReady }) {
       setTimeout(() => {
         setResult(report);
         setScanning(false);
-        onTrendsReady && onTrendsReady(report);
       }, 400);
     } catch (e) {
       clearInterval(iv);
@@ -195,6 +194,12 @@ export default function TrendResearchPage({ dna, trends, onTrendsReady }) {
                   </div>
                 </Card>
               )}
+
+              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 20 }}>
+                <Btn onClick={() => onTrendsReady && onTrendsReady(result)} size="md">
+                  Continue to Brief Builder →
+                </Btn>
+              </div>
             </div>
           )}
         </div>
