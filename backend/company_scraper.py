@@ -97,6 +97,8 @@ SECTION_SIGNALS: dict[str, list[str]] = {
         "tutorials", "tutorial", "tips", "tip", "knowledge",
         "learn", "learning", "media", "press", "publications",
         "publication", "editorial", "thought-leadership",
+        "case-studies", "casestudies", "case-study", "casestudy",
+        "roster", "works", "campaigns", "our-campaigns",
     ],
     "contact": [
         "contact", "contact-us", "contactus", "get-in-touch",
@@ -401,8 +403,12 @@ def infer_tone(texts: list[str]) -> tuple[list[str], str, int, bool]:
     if not tone:
         tone = ["professional", "helpful"]
 
+    nav_junk_starts = ("skip", "cookie", "accept", "menu", "home", "toggle",
+                       "close", "search", "login", "sign", "privacy", "navigation")
     good_samples = [s for s in sentences
-                    if 10 < len(s.split()) < 30 and not s.lower().startswith("cookie")]
+                    if 10 < len(s.split()) < 30
+                    and not s.lower().startswith(nav_junk_starts)
+                    and not _is_lorem_ipsum(s)]
     sample = good_samples[0] if good_samples else (sentences[0] if sentences else "")
 
     return tone, sample.strip(), avg_len, uses_first_person
@@ -801,6 +807,7 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
         c for c in service_candidates
         if any(w in c.lower() for w in service_keywords)
         and not any(u in c.lower() for u in ui_noise)
+        and not _is_lorem_ipsum(c)
     ][:10]
 
     dna.usps = extract_usps(all_texts)
