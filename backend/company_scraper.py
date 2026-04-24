@@ -796,12 +796,17 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
                     break
 
         # ── Step 7: Scrape top 5 articles ────────────────────────────────────
-        # Deduplicate
+        # Deduplicate and filter junk
         seen_hrefs: set[str] = set()
         unique_articles: list[dict] = []
         for art in discovered_articles:
             href = art["href"].split("?")[0].split("#")[0].rstrip("/")
             text = art["text"].strip()
+            # Skip email links, javascript links, tel links
+            if any(href.startswith(p) for p in ("mailto:", "tel:", "javascript:")):
+                continue
+            if "@" in text:  # email addresses as link text
+                continue
             if href not in seen_hrefs and len(text) > 8 and is_article_url(urlparse(href).path):
                 seen_hrefs.add(href)
                 unique_articles.append({"href": href, "text": text})
