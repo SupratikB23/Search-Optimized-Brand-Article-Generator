@@ -92,6 +92,155 @@ def quality_check(content: str, dna: CompanyDNA, brief: "ArticleBrief") -> dict[
     }
 
 
+def compute_seo_aeo_geo_scores(content: str, dna: CompanyDNA, brief: "ArticleBrief") -> dict[str, int]:
+    """
+    Score the article on SEO, AEO and GEO dimensions — each 0–100.
+
+    SEO  — Google ranking signals (keyword use, structure, length, headings)
+    AEO  — Answer Engine Optimisation (featured snippets, direct answers, FAQ)
+    GEO  — Generative Engine Optimisation (stats, citations, declarative claims)
+    """
+    lower   = content.lower()
+    words   = content.split()
+    wc      = len(words)
+    first_100 = " ".join(words[:100]).lower()
+    h2_count  = content.count("## ")
+    h3_count  = content.count("### ")
+
+    # ── SEO score (100 pts) ───────────────────────────────────────────────────
+    seo = 0
+    pk = brief.primary_keyword.lower()
+
+    # Keyword in title / H1 (20 pts)
+    h1_match = re.search(r"^# (.+)$", content, re.M)
+    h1_text  = h1_match.group(1).lower() if h1_match else ""
+    if pk in h1_text:                                    seo += 20
+    elif any(w in h1_text for w in pk.split()):          seo += 10
+
+    # Keyword in first 100 words (15 pts)
+    if pk in first_100:                                  seo += 15
+    elif any(w in first_100 for w in pk.split()):        seo += 7
+
+    # Keyword in ≥2 H2 headings (15 pts)
+    h2s = re.findall(r"^## (.+)$", content, re.M)
+    kw_h2 = sum(1 for h in h2s if pk in h.lower() or any(w in h.lower() for w in pk.split()))
+    if kw_h2 >= 2:   seo += 15
+    elif kw_h2 == 1: seo += 8
+
+    # Secondary keywords used (10 pts)
+    sec_hits = sum(1 for kw in brief.secondary_keywords if kw.lower() in lower)
+    seo += min(10, int(10 * sec_hits / max(len(brief.secondary_keywords), 1)))
+
+    # Word count in sweet spot 1100–1600 (15 pts)
+    if 1100 <= wc <= 1600:   seo += 15
+    elif 900 <= wc < 1100:   seo += 8
+    elif 1600 < wc <= 1900:  seo += 8
+
+    # ≥4 H2 sections (10 pts)
+    if h2_count >= 4:    seo += 10
+    elif h2_count >= 2:  seo += 5
+
+    # Bold first mention of key terms (5 pts)
+    if content.count("**") >= 4:  seo += 5
+
+    # No banned phrases (10 pts)
+    if len(has_banned_phrases(content)) == 0:  seo += 10
+
+    # ── AEO score (100 pts) ───────────────────────────────────────────────────
+    aeo = 0
+
+    # FAQ section present (25 pts)
+    has_faq = "## faq" in lower or "## frequently asked" in lower
+    if has_faq:  aeo += 25
+
+    # At least 2 H2s phrased as questions (15 pts)
+    q_h2s = sum(1 for h in h2s if h.strip().endswith("?"))
+    if q_h2s >= 2:   aeo += 15
+    elif q_h2s == 1: aeo += 7
+
+    # Direct-answer paragraphs after H2s (20 pts)
+    # Check that each H2 is followed by a non-empty paragraph within ~3 lines
+    sections = re.split(r"^## .+$", content, flags=re.M)
+    sections_with_answer = sum(
+        1 for s in sections[1:]  # skip preamble
+        if len(s.strip().split("\n")[0].split()) >= 8
+    )
+    total_sections = max(len(sections) - 1, 1)
+    aeo += min(20, int(20 * sections_with_answer / total_sections))
+
+    # Conclusion present (10 pts)
+    if "## conclusion" in lower:  aeo += 10
+
+    # Uses question-style subheadings (H3) (10 pts)
+    h3s = re.findall(r"^### (.+)$", content, re.M)
+    if any(h.strip().endswith("?") for h in h3s):  aeo += 10
+
+    # Answer-first writing: first sentence of intro answers something (10 pts)
+    intro_paras = [p for p in content.split("\n\n") if p.strip() and not p.startswith("#")]
+    if intro_paras:
+        first_sent = intro_paras[0].split(".")[0]
+        if len(first_sent.split()) >= 8:  aeo += 10
+
+    # Short, scan-friendly paragraphs (10 pts)
+    paras = [p.strip() for p in content.split("\n\n") if p.strip() and not p.startswith("#")]
+    short_paras = sum(1 for p in paras if len(p.split()) <= 80)
+    if paras:
+        ratio = short_paras / len(paras)
+        aeo += int(10 * ratio)
+
+    # ── GEO score (100 pts) ───────────────────────────────────────────────────
+    geo = 0
+
+    # Statistics / numbers (25 pts)
+    stat_patterns = [
+        r"\d+%",                         # percentages
+        r"\$[\d,]+",                     # dollar amounts
+        r"\d+[xX]\s",                    # multipliers like 4.2x
+        r"\d+\s+(?:days?|weeks?|months?|years?)",  # time ranges
+        r"(?:according to|study|report|research|survey)\b",
+    ]
+    stat_hits = sum(1 for p in stat_patterns if re.search(p, content, re.I))
+    geo += min(25, stat_hits * 5)
+
+    # Blockquote stats (15 pts)
+    bq_count = len(re.findall(r"^> .+$", content, re.M))
+    if bq_count >= 3:    geo += 15
+    elif bq_count >= 1:  geo += 8
+
+    # "According to" attributed claims (20 pts)
+    attr_count = len(re.findall(r"according to\b", content, re.I))
+    if attr_count >= 2:   geo += 20
+    elif attr_count == 1: geo += 10
+
+    # Company name expertise statements (20 pts)
+    company = dna.name or ""
+    expertise_phrases = ["has seen", "in our work", "we've found", "our experience",
+                         "we have seen", "we see", "in our projects", "our clients",
+                         "our team", "we deliver", "we build", "we help"]
+    expertise_hits = sum(1 for p in expertise_phrases if p in lower)
+    geo += min(20, expertise_hits * 5)
+
+    # Declarative sentences (no vague hedging) (10 pts)
+    hedges = ["many experts believe", "some say", "it is thought", "it may be",
+              "could potentially", "might possibly"]
+    hedge_count = sum(1 for h in hedges if h in lower)
+    if hedge_count == 0:   geo += 10
+    elif hedge_count <= 2: geo += 5
+
+    # Named sources / brands mentioned (10 pts)
+    # Rough heuristic: capitalised proper nouns beyond the company name
+    proper_nouns = re.findall(r"\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]+)*\b", content)
+    unique_sources = len({n for n in proper_nouns if n.lower() not in (company.lower(), "the", "a")})
+    if unique_sources >= 5:   geo += 10
+    elif unique_sources >= 2: geo += 5
+
+    return {
+        "seo": min(100, seo),
+        "aeo": min(100, aeo),
+        "geo": min(100, geo),
+    }
+
+
 def print_quality_report(checks: dict[str, bool], banned: list[str]) -> bool:
     """Print quality report and return True if all automated checks pass."""
     passed = sum(checks.values())

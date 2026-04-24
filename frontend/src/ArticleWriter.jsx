@@ -31,6 +31,133 @@ function renderMd(md) {
   return out.join('\n');
 }
 
+// ── Score configuration ────────────────────────────────────────────────────────
+const SCORE_CONFIG = [
+  {
+    key:   "seo",
+    label: "SEO Score",
+    desc:  "Google ranking",
+    color: "#22d3ee",          // neon cyan
+    glow:  "rgba(34,211,238,0.18)",
+    border:"rgba(34,211,238,0.35)",
+    bg:    "rgba(34,211,238,0.06)",
+  },
+  {
+    key:   "aeo",
+    label: "AEO Score",
+    desc:  "Answer engines",
+    color: "#a78bfa",          // neon violet
+    glow:  "rgba(167,139,250,0.18)",
+    border:"rgba(167,139,250,0.35)",
+    bg:    "rgba(167,139,250,0.06)",
+  },
+  {
+    key:   "geo",
+    label: "GEO Score",
+    desc:  "AI citation",
+    color: "#34d399",          // neon emerald
+    glow:  "rgba(52,211,153,0.18)",
+    border:"rgba(52,211,153,0.35)",
+    bg:    "rgba(52,211,153,0.06)",
+  },
+];
+
+function ScoreRing({ score, color, glow }) {
+  const r   = 28;
+  const circ = 2 * Math.PI * r;
+  const dash = (score / 100) * circ;
+  return (
+    <svg width={72} height={72} viewBox="0 0 72 72" style={{ flexShrink: 0 }}>
+      {/* track */}
+      <circle cx={36} cy={36} r={r} fill="none" stroke="var(--surface-3)" strokeWidth={5} />
+      {/* progress */}
+      <circle
+        cx={36} cy={36} r={r} fill="none"
+        stroke={color} strokeWidth={5}
+        strokeDasharray={`${dash} ${circ}`}
+        strokeLinecap="round"
+        transform="rotate(-90 36 36)"
+        style={{ filter: `drop-shadow(0 0 5px ${glow})`, transition: "stroke-dasharray 1s cubic-bezier(.4,0,.2,1)" }}
+      />
+      {/* number */}
+      <text
+        x={36} y={40}
+        textAnchor="middle"
+        fill={color}
+        fontSize={15}
+        fontWeight={800}
+        fontFamily="var(--font-display)"
+        style={{ letterSpacing: "-0.03em" }}
+      >{score}</text>
+    </svg>
+  );
+}
+
+function ScoreBoxes({ scores }) {
+  if (!scores) return null;
+  return (
+    <div style={{
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr 1fr",
+      gap: 14,
+      marginBottom: 18,
+    }}>
+      {SCORE_CONFIG.map(cfg => {
+        const score = scores[cfg.key] ?? 0;
+        const grade = score >= 80 ? "Excellent" : score >= 60 ? "Good" : score >= 40 ? "Fair" : "Needs work";
+        return (
+          <div key={cfg.key} style={{
+            borderRadius: 14,
+            border: `1px solid ${cfg.border}`,
+            background: cfg.bg,
+            boxShadow: `0 0 24px ${cfg.glow}`,
+            padding: "18px 20px",
+            display: "flex",
+            alignItems: "center",
+            gap: 16,
+            position: "relative",
+            overflow: "hidden",
+          }}>
+            {/* subtle top accent line */}
+            <div style={{
+              position: "absolute", top: 0, left: 0, right: 0, height: 2,
+              background: `linear-gradient(90deg, transparent, ${cfg.color}, transparent)`,
+            }} />
+            <ScoreRing score={score} color={cfg.color} glow={cfg.glow} />
+            <div>
+              <div style={{
+                fontSize: 9,
+                fontWeight: 700,
+                letterSpacing: "0.14em",
+                textTransform: "uppercase",
+                color: cfg.color,
+                fontFamily: "var(--font-mono)",
+                marginBottom: 4,
+                opacity: 0.9,
+              }}>{cfg.label}</div>
+              <div style={{
+                fontSize: 22,
+                fontWeight: 900,
+                color: cfg.color,
+                fontFamily: "var(--font-display)",
+                letterSpacing: "-0.03em",
+                lineHeight: 1,
+                marginBottom: 4,
+                textShadow: `0 0 16px ${cfg.glow}`,
+              }}>{score}<span style={{ fontSize: 12, fontWeight: 500, opacity: 0.6 }}>/100</span></div>
+              <div style={{
+                fontSize: 11,
+                color: "var(--text-3)",
+                fontFamily: "var(--font-ui)",
+              }}>{grade} · {cfg.desc}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function ArticleWriterPage({ dna, brief, trend, onArticleReady }) {
   const [model, setModel]       = useState("gemini-2.0-flash");
   const [apiKey, setApiKey]     = useState("");
@@ -42,6 +169,7 @@ export default function ArticleWriterPage({ dna, brief, trend, onArticleReady })
   const [viewMode, setViewMode] = useState("preview");
   const [error, setError]       = useState(null);
   const [checks, setChecks]     = useState([]);
+  const [scores, setScores]     = useState(null);   // { seo, aeo, geo }
   const timerRef = useRef(null);
   const outRef   = useRef(null);
 
@@ -74,7 +202,7 @@ export default function ArticleWriterPage({ dna, brief, trend, onArticleReady })
 
   async function generate() {
     if (!brief || !dna) return;
-    setGen(true); setStream(""); setDone(false); setArticle(null); setError(null); setChecks([]);
+    setGen(true); setStream(""); setDone(false); setArticle(null); setError(null); setChecks([]); setScores(null);
 
     // Build the trend object for the API
     const trendData = trend || { title: brief.trend_hook || "", summary: "", source: "", url: "" };
@@ -89,6 +217,9 @@ export default function ArticleWriterPage({ dna, brief, trend, onArticleReady })
       });
 
       if (result.quality_checks) setChecks(result.quality_checks);
+      if (result.seo_score !== undefined) {
+        setScores({ seo: result.seo_score, aeo: result.aeo_score, geo: result.geo_score });
+      }
       if (result.seo_title) {
         setArticle({
           content: result.content,
@@ -129,6 +260,8 @@ export default function ArticleWriterPage({ dna, brief, trend, onArticleReady })
           </p>
         </Card>
       )}
+
+      <ScoreBoxes scores={scores} />
 
       <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16, alignItems: "start" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
