@@ -878,7 +878,13 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
         if _is_lorem_ipsum(line):
             continue
         tagline_candidates.append(line)
-    dna.tagline = tagline_candidates[0] if tagline_candidates else ""
+    if tagline_candidates:
+        dna.tagline = tagline_candidates[0]
+    elif dna.description:
+        # Fallback to meta/OG description
+        dna.tagline = dna.description[:150]
+    else:
+        dna.tagline = ""
 
     dna.existing_article_titles = article_titles
     dna.portfolio_items = portfolio_items[:10]
