@@ -522,8 +522,7 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
         page_contents["homepage"] = homepage_text
 
         # Extract brand name — prefer OG/meta tags, then structured data, then <title>.
-        # Avoid using raw <title> since it often contains SEO phrases like
-        # "Best interior designers in Jubilee Hills".
+        # Avoid using raw <title> since it often contains SEO phrases or taglines.
         try:
             brand_name = await page.evaluate("""() => {
                 // 1. Open Graph site_name (most reliable brand name)
@@ -544,26 +543,32 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
                     } catch(e) {}
                 }
 
-                // 3. <title> — but only the first segment before separators
+                // 3. <title> — split on common separators and check each segment
                 const title = document.title || '';
-                const seg = title.split(/[|–—\\-·:]/)[0].trim();
-                // Reject if it looks like an SEO phrase (>4 words or contains "best", "top", etc.)
-                const words = seg.split(/\\s+/);
-                const seoWords = ['best', 'top', 'leading', 'premier', '#1', 'no.1', 'affordable', 'cheap'];
-                const isSEO = words.length > 4 || seoWords.some(w => seg.toLowerCase().includes(w));
-                if (!isSEO && seg) return seg;
+                // Split on all common separators: | – — - · : » ·
+                const parts = title.split(/[|–—·:»]/).map(s => s.trim()).filter(Boolean);
+                const seoWords = ['best', 'top', 'leading', 'premier', '#1', 'no.1',
+                                  'affordable', 'cheap', 'data-driven', 'performance',
+                                  'growth', 'agency', 'expert', 'specialist'];
 
-                // 4. Try the last segment of title (sometimes brand is after separator)
-                const parts = title.split(/[|–—\\-·:]/);
-                if (parts.length > 1) {
-                    const last = parts[parts.length - 1].trim();
-                    if (last && last.split(/\\s+/).length <= 4) return last;
+                // Find the shortest segment that looks like a brand name (1-4 words, no SEO bait)
+                for (const part of parts) {
+                    const words = part.split(/\\s+/);
+                    const lower = part.toLowerCase();
+                    const isSEO = words.length > 4 || seoWords.some(w => lower.includes(w));
+                    if (!isSEO && words.length >= 1 && words.length <= 4) return part;
+                }
+
+                // If all segments are SEO-ish, try the shortest one
+                if (parts.length > 0) {
+                    const shortest = parts.reduce((a, b) => a.length <= b.length ? a : b);
+                    if (shortest.split(/\\s+/).length <= 4) return shortest;
                 }
 
                 return '';
             }""")
             if brand_name:
-                dna.name = brand_name
+                dna.name = brand_name.strip()
             else:
                 dna.name = domain.replace("www.", "").split(".")[0].title()
         except Exception:
@@ -844,22 +849,78 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
             service_candidates.append(chunk)
 
     service_keywords = [
-        "design", "install", "deliver", "service", "solution", "interior",
-        "furnish", "renovate", "build", "construct", "consult", "manage",
-        "develop", "create", "provide", "modular", "kitchen", "bedroom",
-        "living", "wardrobe", "ceiling", "flooring", "lighting", "residential",
-        "commercial", "hospitality", "turnkey", "execution", "workmanship",
-        "craftsmanship", "approach", "innovation", "creativity", "excellence",
-        "spaces", "aesthet", "functional", "luxury", "bespoke",
+        # General
+        "design", "install", "deliver", "service", "solution", "consult",
+        "manage", "develop", "create", "provide", "strategy", "growth",
+        "optimization", "audit", "training", "support", "analytics",
+        # Interior / construction
+        "interior", "furnish", "renovate", "build", "construct", "modular",
+        "kitchen", "bedroom", "living", "wardrobe", "ceiling", "flooring",
+        "lighting", "residential", "commercial", "hospitality", "turnkey",
+        "execution", "workmanship", "craftsmanship", "spaces", "aesthet",
+        "functional", "luxury", "bespoke",
+        # Digital marketing
+        "seo", "ppc", "google ads", "meta ads", "facebook ads", "social media",
+        "content marketing", "email marketing", "lead generation", "conversion",
+        "performance marketing", "branding", "web development", "paid ads",
+        "advertising", "funnel", "campaign", "digital marketing", "sem",
+        "search engine", "copywriting", "influencer", "automation",
+        # Tech / SaaS
+        "software", "saas", "platform", "api", "cloud", "app development",
+        "machine learning", "data", "devops", "security", "integration",
+        # Healthcare
+        "health", "medical", "clinic", "telemedicine", "wellness",
+        # Ecommerce
+        "ecommerce", "shopify", "marketplace", "fulfillment",
+        # Real estate
+        "real estate", "property", "rental", "leasing",
     ]
     ui_noise = ["view more", "click", "skip", "instagram", "facebook",
-                "youtube", "linkedin", "whatsapp", "pinterest", "explore"]
+                "youtube", "linkedin", "whatsapp", "pinterest", "explore",
+                "connect on linkedin", "book a free", "view all", "view case",
+                "meet the", "our vision"]
+    # Phrases that are section headers / taglines, not actual service descriptions
+    noise_phrases = [
+        "our services", "we don't sell", "what we do", "how we work",
+        "why choose us", "our approach", "our process", "get started",
+        "learn more", "read more", "see all", "view all",
+    ]
     dna.services = [
         c for c in service_candidates
         if any(w in c.lower() for w in service_keywords)
         and not any(u in c.lower() for u in ui_noise)
+        and not any(n in c.lower() for n in noise_phrases)
         and not _is_lorem_ipsum(c)
+        and len(c.split()) >= 3  # Must be at least 3 words (not just a heading)
     ][:10]
+
+    # If no services found via keyword matching, try extracting from structured
+    # patterns on the homepage (e.g., "Performance Marketing", "SEO & Content")
+    if not dna.services:
+        # Look for short capitalized phrases that look like service names
+        homepage_lines = [l.strip() for l in (page_contents.get("homepage", "") + " " + page_contents.get("services", "")).split("\n")]
+        for line in homepage_lines:
+            line = line.strip()
+            # Service-like: 2-8 words, not all lowercase nav junk
+            words = line.split()
+            if 2 <= len(words) <= 8 and len(line) < 80 and len(line) > 8:
+                lower = line.lower()
+                if any(w in lower for w in service_keywords):
+                    if not any(n in lower for n in noise_phrases):
+                        if not any(u in lower for u in ui_noise):
+                            if not _is_lorem_ipsum(line):
+                                dna.services.append(line)
+            if len(dna.services) >= 10:
+                break
+        # Deduplicate
+        seen = set()
+        unique_services = []
+        for s in dna.services:
+            key = s.lower().strip()
+            if key not in seen:
+                seen.add(key)
+                unique_services.append(s)
+        dna.services = unique_services[:10]
 
     dna.usps = extract_usps(all_texts)
     dna.about_text = page_contents.get("about", "")[:2000]
@@ -886,7 +947,63 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
     else:
         dna.tagline = ""
 
-    dna.existing_article_titles = article_titles
+    # Filter out email addresses and junk from article titles
+    article_titles = [
+        t for t in article_titles
+        if "@" not in t                        # no emails
+        and not t.lower().startswith("mailto")
+        and len(t.split()) >= 2                # at least 2 words
+        and not _is_lorem_ipsum(t)
+    ]
+
+    # ── Extract case studies / results from homepage text ─────────────────────
+    # Many sites embed case studies as inline cards on the homepage with patterns
+    # like "+57% Subs UWorld EdTech" or "4.2 ROAS Personiks Healthcare"
+    # These are valuable as "existing article topics" even if not linked pages.
+    case_study_titles = []
+    homepage_combined = dna.homepage_text + " " + page_contents.get("portfolio", "")
+    # Pattern: metric + brand/company name — e.g. "+57% Subs UWorld" or "-41% CPL HomeDealz"
+    cs_patterns = [
+        # "+57% Subs UWorld  EdTech SaaS" or "-41% CPL HomeDealz  Real Estate"
+        r"([+-]?\d+[%xX]?\s+\w+[\w\s]{3,40}?)(?=\s*Challenges|\s*Strategy|\s*$|\n)",
+        # "4.2 ROAS Personiks" or "4.2X ROAS for Personiks"
+        r"(\d+\.?\d*[xX]?\s+(?:ROAS|ROI|CPL|CPA|CTR|CPC)\s+[\w\s]{3,30}?)(?=\s*Challenges|\s*Strategy|\s*$|\n)",
+    ]
+    for pattern in cs_patterns:
+        matches = re.findall(pattern, homepage_combined, re.I)
+        for m in matches:
+            title = m.strip()
+            if 8 < len(title) < 100 and not _is_lorem_ipsum(title):
+                case_study_titles.append(title)
+
+    # Also look for "Case Study" or "Our Work" section headers followed by client names
+    cs_section = re.search(
+        r"(?:case stud|our work|results|work speaks)[^\n]*\n(.*?)(?=\n(?:how we work|about|contact|footer|$))",
+        homepage_combined, re.I | re.S
+    )
+    if cs_section:
+        cs_text = cs_section.group(1)
+        # Extract lines that look like case study titles (short, have a brand name + metric)
+        for line in cs_text.split("\n"):
+            line = line.strip()
+            if (10 < len(line) < 100
+                and re.search(r"[+-]?\d+[%xX]", line)
+                and not _is_lorem_ipsum(line)):
+                case_study_titles.append(line)
+
+    # Deduplicate case studies
+    seen_cs = set()
+    unique_cs = []
+    for t in case_study_titles:
+        key = t.lower()[:30]
+        if key not in seen_cs:
+            seen_cs.add(key)
+            unique_cs.append(t)
+
+    # Merge: scraped article titles + extracted case study titles
+    all_article_titles = article_titles + unique_cs
+
+    dna.existing_article_titles = all_article_titles
     dna.portfolio_items = portfolio_items[:10]
 
     combined = " ".join(all_texts[:3])
