@@ -29,7 +29,7 @@ from company_scraper import CompanyDNA, extract_company_dna
 from trend_researcher import research_trends, TrendItem
 from article_generator import (
     build_brief, write_article, ArticleBrief,
-    quality_check, has_banned_phrases,
+    quality_check, has_banned_phrases, compute_seo_aeo_geo_scores,
 )
 import database as db
 
@@ -157,6 +157,7 @@ async def api_write_article(req: WriteArticleRequest):
 
         checks = quality_check(article.content, dna, brief)
         banned = has_banned_phrases(article.content)
+        scores = compute_seo_aeo_geo_scores(article.content, dna, brief)
 
         return {
             "content":          article.content,
@@ -168,6 +169,9 @@ async def api_write_article(req: WriteArticleRequest):
             "generated_at":     article.generated_at,
             "quality_checks":   [{"label": k.replace("_", " "), "pass": v} for k, v in checks.items()],
             "banned_phrases":   banned,
+            "seo_score":        scores["seo"],
+            "aeo_score":        scores["aeo"],
+            "geo_score":        scores["geo"],
         }
     except HTTPException:
         raise
