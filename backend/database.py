@@ -108,6 +108,15 @@ async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executescript(_SCHEMA)
         await db.commit()
+        # Migrate: add score columns if they don't exist yet
+        for col in ("seo_score", "aeo_score", "geo_score"):
+            try:
+                await db.execute(
+                    f"ALTER TABLE generated_articles ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0"
+                )
+                await db.commit()
+            except Exception:
+                pass  # column already exists
 
 
 # ── Client CRUD ───────────────────────────────────────────────────────────────
@@ -355,8 +364,9 @@ async def save_article(client_id: int, brief_id: int | None, article: dict) -> i
         cur = await db.execute(
             """INSERT INTO generated_articles
                (client_id, brief_id, title, article_slug, content_md,
-                word_count, seo_title, meta_description, quality_passed, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                word_count, seo_title, meta_description, quality_passed,
+                seo_score, aeo_score, geo_score, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 client_id,
                 brief_id,
@@ -367,6 +377,9 @@ async def save_article(client_id: int, brief_id: int | None, article: dict) -> i
                 article.get("seo_title", ""),
                 article.get("meta_description", ""),
                 1 if article.get("quality_passed") else 0,
+                article.get("seo_score", 0),
+                article.get("aeo_score", 0),
+                article.get("geo_score", 0),
                 now,
             ),
         )
@@ -395,11 +408,29 @@ async def save_article(client_id: int, brief_id: int | None, article: dict) -> i
 
 
 async def get_article(client_id: int, article_id: int) -> dict | None:
-    """Fetch a single article row including full content."""
+    """Fetch a single article row including full content, scores, and associated brief."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         row = await (await db.execute(
             "SELECT * FROM generated_articles WHERE id = ? AND client_id = ?",
             (article_id, client_id),
         )).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        result = dict(row)
+        # Attach the brief used to generate this article
+        if result.get("brief_id"):
+            brief_row = await (await db.execute(
+                "SELECT brief_json FROM article_briefs WHERE id = ?",
+                (result["brief_id"],),
+            )).fetchone()
+            if brief_row:
+                try:
+                    result["brief"] = json.loads(brief_row["brief_json"])
+                except Exception:
+                    result["brief"] = None
+            else:
+                result["brief"] = None
+        else:
+            result["brief"] = None
+        return result
