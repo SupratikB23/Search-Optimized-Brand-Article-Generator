@@ -487,6 +487,23 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
                 await asyncio.sleep(0.5)
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 await asyncio.sleep(0.5)
+                # Expand accordions / <details> / collapsed panels so hidden text is visible
+                await page.evaluate("""() => {
+                    document.querySelectorAll('details').forEach(d => { d.open = true; });
+                    [
+                        '[aria-expanded="false"]',
+                        '.accordion-button.collapsed',
+                        '[data-bs-toggle="collapse"]',
+                        '[data-toggle="collapse"]',
+                    ].forEach(sel => {
+                        try {
+                            document.querySelectorAll(sel).forEach(el => {
+                                try { el.click(); } catch(e) {}
+                            });
+                        } catch(e) {}
+                    });
+                }""")
+                await asyncio.sleep(0.5)
                 text = await page.evaluate("""() => {
                     ['nav','footer','header','script','style','noscript',
                      '.cookie','#cookie','[class*="cookie"]','[id*="cookie"]',
@@ -508,6 +525,71 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
                     "a[href]",
                     "els => els.map(e => ({href: e.href||'', text:(e.innerText||'').trim()}))",
                 )
+            except Exception:
+                return []
+
+        async def extract_service_headings() -> list[str]:
+            """
+            Extract service names directly from heading / accordion / tab labels
+            on the currently loaded page.  Works even when content is inside
+            collapsed accordions (we already opened them in scrape()).
+            """
+            try:
+                return await page.evaluate("""() => {
+                    const results = [];
+                    const seen   = new Set();
+                    const skipWords = new Set([
+                        'menu','nav','cookie','toggle','close','search','login',
+                        'sign','home','contact','about','skip','back','next',
+                        'prev','submit','send','privacy','terms','loading',
+                        'read more','learn more','view more','see more','get started',
+                        'our services','what we do','how we work','why choose us',
+                    ]);
+
+                    function add(raw) {
+                        const t = (raw || '').replace(/\\s+/g, ' ').trim();
+                        if (t.length < 2 || t.length > 100) return;
+                        const lower = t.toLowerCase();
+                        if (skipWords.has(lower)) return;
+                        if (lower.startsWith('skip ') || lower.startsWith('cookie')) return;
+                        if (!seen.has(lower)) { seen.add(lower); results.push(t); }
+                    }
+
+                    // 1. Headings inside service/accordion/feature containers
+                    const containerSelectors = [
+                        '[class*="service"]','[id*="service"]',
+                        '[class*="accordion"]','[id*="accordion"]',
+                        '[class*="offering"]','[class*="capability"]',
+                        '[class*="solution"]','[class*="tab-"]',
+                        '[class*="feature"]','[class*="card"]',
+                        '[class*="panel"]','[class*="box"]',
+                        '.services','#services','.offerings','.solutions',
+                        '[class*="what-we"]','[class*="whatwe"]',
+                    ];
+                    containerSelectors.forEach(sel => {
+                        document.querySelectorAll(sel).forEach(container => {
+                            container.querySelectorAll(
+                                'h1,h2,h3,h4,h5,dt,summary,' +
+                                '.title,.heading,[class*="title"],[class*="heading"],[class*="label"]'
+                            ).forEach(el => add(el.innerText || el.textContent || ''));
+                        });
+                    });
+
+                    // 2. <summary> and accordion buttons globally
+                    document.querySelectorAll(
+                        'summary,.accordion-button,[class*="accordion-title"],' +
+                        '[class*="panel-title"],[class*="tab-title"]'
+                    ).forEach(el => add(el.innerText || el.textContent || ''));
+
+                    // 3. Short h3/h4 headings (likely service labels)
+                    document.querySelectorAll('h3,h4').forEach(el => {
+                        const t = (el.innerText || '').trim();
+                        if (t.length > 2 && t.length < 80 && t.split(/\\s+/).length <= 8)
+                            add(t);
+                    });
+
+                    return results.slice(0, 30);
+                }""")
             except Exception:
                 return []
 
@@ -701,6 +783,7 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
                 queue(section, urljoin(base_url, path))
 
         # ── Step 5: Scrape each section ──────────────────────────────────────
+        scraped_service_headings: list[str] = []
         for section in ["about", "services", "portfolio", "blog", "contact"]:
             candidates = section_candidates.get(section, [])
             # Try listing URLs first (shorter paths), skip deep article URLs
@@ -714,6 +797,10 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
                 if len(text) > 200:
                     page_contents[section] = text
                     print(f"[DNA]   OK {len(text)} chars")
+                    # While still on the services page, extract headings directly
+                    if section == "services":
+                        scraped_service_headings = await extract_service_headings()
+                        print(f"[DNA]   Service headings extracted: {scraped_service_headings[:6]}")
                     break
 
         # ── Step 6: Discover articles (3-layer strategy) ─────────────────────
@@ -747,7 +834,8 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
                         and len(parts[-1]) > 3
                         and parts[-1] not in {"#", ""}
                         and not _is_lorem_ipsum(text)):
-                        discovered_articles.append({"href": href, "text": text})
+                        # Tag with source so we can filter differently later
+                        discovered_articles.append({"href": href, "text": text, "section": _als})
                 print(f"[DNA] {_als.title()} listing → {len(discovered_articles)} article links so far")
 
         # Legacy blog-only path (kept for sites where blog_text exists but loop above handled it)
@@ -774,7 +862,7 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
                         and len(parts[-1]) > 3
                         and parts[-1] not in {"#", ""}
                         and not _is_lorem_ipsum(text)):
-                        discovered_articles.append({"href": href, "text": text})
+                        discovered_articles.append({"href": href, "text": text, "section": "blog"})
             print(f"[DNA] Blog listing → {len(discovered_articles)} article links")
 
         # — 6b: Sitemap-based article discovery —
@@ -807,7 +895,7 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
                     for url in art_urls[:8]:
                         slug = urlparse(url).path.strip("/").split("/")[-1]
                         title = slug.replace("-", " ").replace("_", " ").title()
-                        discovered_articles.append({"href": url, "text": title})
+                        discovered_articles.append({"href": url, "text": title, "section": "blog"})
                     print(f"[DNA] Sitemap segment /{seg}/ → {len(art_urls)} articles")
                     break
 
@@ -825,7 +913,7 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
                 if len(sub_links) >= 3:
                     print(f"[DNA] Auto-detected listing: /{seg}/ ({len(sub_links)} items)")
                     for l in sub_links[:8]:
-                        discovered_articles.append({"href": l["href"], "text": l["text"]})
+                        discovered_articles.append({"href": l["href"], "text": l["text"], "section": "blog"})
                     break
 
         # — 6d: Try every undiscovered nav segment as a potential listing page —
@@ -850,7 +938,7 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
                 if len(sub) >= 3:
                     print(f"[DNA] Found listing: /{seg}/ ({len(sub)} articles)")
                     for l in sub[:8]:
-                        discovered_articles.append({"href": l["href"], "text": l["text"]})
+                        discovered_articles.append({"href": l["href"], "text": l["text"], "section": "blog"})
                     break
 
         # ── Step 7: Scrape top 5 articles ────────────────────────────────────
@@ -860,14 +948,30 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
         for art in discovered_articles:
             href = art["href"].split("?")[0].split("#")[0].rstrip("/")
             text = art["text"].strip()
+            source_section = art.get("section", "blog")
             # Skip email links, javascript links, tel links
             if any(href.startswith(p) for p in ("mailto:", "tel:", "javascript:")):
                 continue
             if "@" in text:  # email addresses as link text
                 continue
-            if href not in seen_hrefs and len(text) > 8 and is_article_url(urlparse(href).path):
-                seen_hrefs.add(href)
-                unique_articles.append({"href": href, "text": text})
+            if not (href not in seen_hrefs and len(text) > 8 and is_article_url(urlparse(href).path)):
+                continue
+            # For portfolio-sourced links, only accept titles that look like real article titles:
+            # - at least 3 words (company/project names are usually 1-2 words)
+            # - not pure Title Case proper-noun strings (e.g. "Success Group", "ABC Interiors")
+            if source_section == "portfolio":
+                words = text.split()
+                if len(words) < 3:
+                    continue
+                # Skip if every word is capitalized and no lowercase articles/prepositions
+                # (dead giveaway for a company/project name, not an article title)
+                lowercase_connectors = {"a", "an", "the", "of", "in", "for", "to",
+                                        "and", "or", "but", "by", "at", "on", "with",
+                                        "how", "why", "what", "when", "which"}
+                if not any(w.lower() in lowercase_connectors for w in words):
+                    continue
+            seen_hrefs.add(href)
+            unique_articles.append({"href": href, "text": text})
 
         print(f"[DNA] {len(unique_articles)} unique article URLs to read")
         for link in unique_articles[:5]:
@@ -901,27 +1005,21 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
 
     dna.top_keywords = extract_keywords_spacy(all_texts + article_texts, top_n=40)
 
-    services_raw = page_contents.get(
-        "services",
-        page_contents.get("homepage", "") + " " + page_contents.get("about", ""),
-    )
-    service_candidates = []
-    for chunk in re.split(r"[\n.!]", services_raw):
-        chunk = chunk.strip()
-        if 8 < len(chunk) < 120:
-            service_candidates.append(chunk)
-
     service_keywords = [
         # General
         "design", "install", "deliver", "service", "solution", "consult",
         "manage", "develop", "create", "provide", "strategy", "growth",
         "optimization", "audit", "training", "support", "analytics",
-        # Interior / construction
-        "interior", "furnish", "renovate", "build", "construct", "modular",
-        "kitchen", "bedroom", "living", "wardrobe", "ceiling", "flooring",
-        "lighting", "residential", "commercial", "hospitality", "turnkey",
-        "execution", "workmanship", "craftsmanship", "spaces", "aesthet",
-        "functional", "luxury", "bespoke",
+        # Interior / construction / architecture
+        "interior", "furnish", "renovate", "renovation", "refurbish",
+        "build", "construct", "modular", "kitchen", "bedroom", "living",
+        "wardrobe", "ceiling", "flooring", "lighting", "residential",
+        "commercial", "hospitality", "turnkey", "execution", "workmanship",
+        "craftsmanship", "spaces", "aesthet", "functional", "luxury",
+        "bespoke", "visualization", "visualisation", "rendering", "3d",
+        "2d", "architectural", "landscape", "elevation", "layout",
+        "planning", "project management", "procurement", "supervision",
+        "remodel", "fit-out", "fitout", "fit out", "decor", "decoration",
         # Digital marketing
         "seo", "ppc", "google ads", "meta ads", "facebook ads", "social media",
         "content marketing", "email marketing", "lead generation", "conversion",
@@ -942,48 +1040,76 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
                 "youtube", "linkedin", "whatsapp", "pinterest", "explore",
                 "connect on linkedin", "book a free", "view all", "view case",
                 "meet the", "our vision"]
-    # Phrases that are section headers / taglines, not actual service descriptions
     noise_phrases = [
         "our services", "we don't sell", "what we do", "how we work",
         "why choose us", "our approach", "our process", "get started",
         "learn more", "read more", "see all", "view all",
     ]
-    dna.services = [
-        c for c in service_candidates
-        if any(w in c.lower() for w in service_keywords)
-        and not any(u in c.lower() for u in ui_noise)
-        and not any(n in c.lower() for n in noise_phrases)
-        and not _is_lorem_ipsum(c)
-        and len(c.split()) >= 3  # Must be at least 3 words (not just a heading)
-    ][:10]
 
-    # If no services found via keyword matching, try extracting from structured
-    # patterns on the homepage (e.g., "Performance Marketing", "SEO & Content")
+    def _is_service_name(text: str) -> bool:
+        lower = text.lower()
+        return (
+            any(w in lower for w in service_keywords)
+            and not any(u in lower for u in ui_noise)
+            and not any(n in lower for n in noise_phrases)
+            and not _is_lorem_ipsum(text)
+        )
+
+    # Priority 1: Use directly extracted headings from the services page
+    # These are already the clean service labels — use them first.
+    if scraped_service_headings:
+        heading_services = []
+        seen_svc = set()
+        for h in scraped_service_headings:
+            h = h.strip()
+            key = h.lower()
+            if key in seen_svc or len(h) < 2:
+                continue
+            if any(n in key for n in noise_phrases + ui_noise):
+                continue
+            if _is_lorem_ipsum(h):
+                continue
+            seen_svc.add(key)
+            heading_services.append(h)
+        dna.services = heading_services[:12]
+        print(f"[DNA]   Services from headings: {dna.services[:5]}")
+
+    # Priority 2: Full-sentence extraction from services page body text
     if not dna.services:
-        # Look for short capitalized phrases that look like service names
-        homepage_lines = [l.strip() for l in (page_contents.get("homepage", "") + " " + page_contents.get("services", "")).split("\n")]
+        services_raw = page_contents.get(
+            "services",
+            page_contents.get("homepage", "") + " " + page_contents.get("about", ""),
+        )
+        service_candidates = []
+        for chunk in re.split(r"[\n.!]", services_raw):
+            chunk = chunk.strip()
+            if 4 < len(chunk) < 120:
+                service_candidates.append(chunk)
+
+        dna.services = [
+            c for c in service_candidates
+            if _is_service_name(c)
+            and len(c.split()) >= 1
+        ][:10]
+
+    # Priority 3: Short capitalized phrases from homepage / services page lines
+    if not dna.services:
+        all_source = (
+            page_contents.get("homepage", "")
+            + "\n" + page_contents.get("services", "")
+        )
+        homepage_lines = [l.strip() for l in all_source.split("\n")]
+        seen_svc = set()
         for line in homepage_lines:
-            line = line.strip()
-            # Service-like: 2-8 words, not all lowercase nav junk
             words = line.split()
-            if 2 <= len(words) <= 8 and len(line) < 80 and len(line) > 8:
-                lower = line.lower()
-                if any(w in lower for w in service_keywords):
-                    if not any(n in lower for n in noise_phrases):
-                        if not any(u in lower for u in ui_noise):
-                            if not _is_lorem_ipsum(line):
-                                dna.services.append(line)
+            if 1 <= len(words) <= 8 and 3 < len(line) < 80:
+                if _is_service_name(line):
+                    key = line.lower().strip()
+                    if key not in seen_svc:
+                        seen_svc.add(key)
+                        dna.services.append(line)
             if len(dna.services) >= 10:
                 break
-        # Deduplicate
-        seen = set()
-        unique_services = []
-        for s in dna.services:
-            key = s.lower().strip()
-            if key not in seen:
-                seen.add(key)
-                unique_services.append(s)
-        dna.services = unique_services[:10]
 
     dna.usps = extract_usps(all_texts)
     dna.about_text = page_contents.get("about", "")[:2000]
@@ -1020,51 +1146,51 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
     ]
 
     # ── Extract case studies / results from homepage text ─────────────────────
-    # Many sites embed case studies as inline cards on the homepage with patterns
-    # like "+57% Subs UWorld EdTech" or "4.2 ROAS Personiks Healthcare"
-    # These are valuable as "existing article topics" even if not linked pages.
+    # Only pull metric-based case study titles if the site looks like a marketing/
+    # performance agency (has ROAS/ROI/CPL/CTR on the homepage). Interior design,
+    # retail, and other sites don't have these and the regex creates false positives.
     case_study_titles = []
     homepage_combined = dna.homepage_text + " " + page_contents.get("portfolio", "")
-    # Pattern: metric + brand/company name — e.g. "+57% Subs UWorld" or "-41% CPL HomeDealz"
-    cs_patterns = [
-        # "+57% Subs UWorld  EdTech SaaS" or "-41% CPL HomeDealz  Real Estate"
-        r"([+-]?\d+[%xX]?\s+\w+[\w\s]{3,40}?)(?=\s*Challenges|\s*Strategy|\s*$|\n)",
-        # "4.2 ROAS Personiks" or "4.2X ROAS for Personiks"
-        r"(\d+\.?\d*[xX]?\s+(?:ROAS|ROI|CPL|CPA|CTR|CPC)\s+[\w\s]{3,30}?)(?=\s*Challenges|\s*Strategy|\s*$|\n)",
-    ]
-    for pattern in cs_patterns:
-        matches = re.findall(pattern, homepage_combined, re.I)
-        for m in matches:
-            title = m.strip()
-            if 8 < len(title) < 100 and not _is_lorem_ipsum(title):
-                case_study_titles.append(title)
+    is_perf_agency = bool(re.search(
+        r"\b(ROAS|ROI|CPL|CPA|CTR|CPC|leads generated|ad spend|conversion rate)\b",
+        homepage_combined, re.I
+    ))
+    if is_perf_agency:
+        cs_patterns = [
+            r"([+-]?\d+[%xX]?\s+\w+[\w\s]{3,40}?)(?=\s*Challenges|\s*Strategy|\s*$|\n)",
+            r"(\d+\.?\d*[xX]?\s+(?:ROAS|ROI|CPL|CPA|CTR|CPC)\s+[\w\s]{3,30}?)(?=\s*Challenges|\s*Strategy|\s*$|\n)",
+        ]
+        for pattern in cs_patterns:
+            matches = re.findall(pattern, homepage_combined, re.I)
+            for m in matches:
+                title = m.strip()
+                if 8 < len(title) < 100 and not _is_lorem_ipsum(title):
+                    case_study_titles.append(title)
 
-    # Also look for "Case Study" or "Our Work" section headers followed by client names
-    cs_section = re.search(
-        r"(?:case stud|our work|results|work speaks)[^\n]*\n(.*?)(?=\n(?:how we work|about|contact|footer|$))",
-        homepage_combined, re.I | re.S
-    )
-    if cs_section:
-        cs_text = cs_section.group(1)
-        # Extract lines that look like case study titles (short, have a brand name + metric)
-        for line in cs_text.split("\n"):
-            line = line.strip()
-            if (10 < len(line) < 100
-                and re.search(r"[+-]?\d+[%xX]", line)
-                and not _is_lorem_ipsum(line)):
-                case_study_titles.append(line)
+        cs_section = re.search(
+            r"(?:case stud|our work|results|work speaks)[^\n]*\n(.*?)(?=\n(?:how we work|about|contact|footer|$))",
+            homepage_combined, re.I | re.S
+        )
+        if cs_section:
+            cs_text = cs_section.group(1)
+            for line in cs_text.split("\n"):
+                line = line.strip()
+                if (10 < len(line) < 100
+                    and re.search(r"[+-]?\d+[%xX]", line)
+                    and not _is_lorem_ipsum(line)):
+                    case_study_titles.append(line)
 
-    # Deduplicate case studies
-    seen_cs = set()
-    unique_cs = []
-    for t in case_study_titles:
-        key = t.lower()[:30]
-        if key not in seen_cs:
-            seen_cs.add(key)
-            unique_cs.append(t)
+        seen_cs: set[str] = set()
+        unique_cs = []
+        for t in case_study_titles:
+            key = t.lower()[:30]
+            if key not in seen_cs:
+                seen_cs.add(key)
+                unique_cs.append(t)
+        case_study_titles = unique_cs
 
     # Merge: scraped article titles + extracted case study titles
-    all_article_titles = article_titles + unique_cs
+    all_article_titles = article_titles + case_study_titles
 
     dna.existing_article_titles = all_article_titles
     dna.portfolio_items = portfolio_items[:10]
