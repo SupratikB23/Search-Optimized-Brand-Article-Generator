@@ -18,6 +18,7 @@ Extraction pipeline (in order of execution):
 import asyncio
 import re
 import json
+import os
 import httpx
 from dataclasses import dataclass, field, asdict
 from typing import Optional
@@ -25,6 +26,18 @@ from urllib.parse import urljoin, urlparse
 from collections import Counter, defaultdict
 
 from playwright.async_api import async_playwright
+
+# ── ddgs — web search (same lib used by trend_researcher) ─────────────────────
+try:
+    from ddgs import DDGS
+    DDGS_AVAILABLE = True
+except ImportError:
+    try:
+        from duckduckgo_search import DDGS
+        DDGS_AVAILABLE = True
+    except ImportError:
+        DDGS_AVAILABLE = False
+        print("[warn] ddgs not installed — web search disabled. Run: pip install ddgs")
 
 # ── spaCy ─────────────────────────────────────────────────────────────────────
 try:
@@ -745,6 +758,209 @@ def extract_usps(texts: list[str]) -> list[str]:
                 break
 
     return usps[:6]
+
+
+# ── Web search helper ─────────────────────────────────────────────────────────
+
+async def _web_search(query: str, max_results: int = 8) -> list[dict]:
+    """Search DuckDuckGo via DDGS and return list of result dicts."""
+    if not DDGS_AVAILABLE:
+        return []
+    try:
+        def _sync():
+            results = []
+            with DDGS() as ddgs:
+                for r in ddgs.text(query, max_results=max_results):
+                    results.append(r)
+            return results
+        return await asyncio.to_thread(_sync)
+    except Exception as e:
+        print(f"[DNA] Web search failed for '{query}': {e}")
+        return []
+
+
+# ── AI brand intelligence (Gemini + web search) ───────────────────────────────
+
+async def _ai_extract_brand_intel(
+    brand_name: str,
+    domain: str,
+    page_contents: dict,
+    api_key: str,
+) -> dict:
+    """
+    Post-scrape AI layer:
+      1. Searches DuckDuckGo for services, USPs, and articles about the brand
+      2. Combines scraped text + search results
+      3. Sends to Gemini Flash for structured extraction
+    Returns dict with: services, usps, tone, brand_keywords, article_titles
+    """
+    empty = {"services": [], "usps": [], "tone": {}, "brand_keywords": [], "article_titles": []}
+
+    # ── 1. Web searches ──────────────────────────────────────────────────────
+    search_corpus: list[str] = []
+    article_candidates: list[dict] = []
+
+    intel_queries = [
+        f"{brand_name} services products features",
+        f"{brand_name} what they do offerings",
+        f"{brand_name} unique advantages differentiators",
+    ]
+    article_queries = [
+        f'"{brand_name}" blog articles news 2024 2025',
+        f"site:{domain} blog news insights articles",
+    ]
+
+    print(f"[DNA] AI: searching web for '{brand_name}'...")
+    for q in intel_queries:
+        for r in await _web_search(q, max_results=5):
+            snippet = f"{r.get('title', '')}. {r.get('body', r.get('snippet', ''))}"
+            if snippet.strip() and len(snippet) > 20:
+                search_corpus.append(snippet[:400])
+
+    for q in article_queries:
+        for r in await _web_search(q, max_results=10):
+            title = (r.get("title") or "").strip()
+            url   = r.get("href") or r.get("url") or ""
+            if title and len(title) > 10 and domain in url:
+                article_candidates.append({"title": title, "url": url})
+
+    # ── 2. Build Gemini prompt ───────────────────────────────────────────────
+    scraped_snapshot = "\n\n".join(
+        f"[{sec.upper()}]\n{txt[:1500]}"
+        for sec, txt in list(page_contents.items())[:5]
+        if txt and isinstance(txt, str)
+    )
+    search_snapshot = "\n".join(search_corpus[:15])
+
+    prompt = f"""You are an expert brand analyst. Analyze the data below about "{brand_name}" (domain: {domain}).
+
+## SCRAPED WEBSITE TEXT:
+{scraped_snapshot[:3000]}
+
+## INTERNET SEARCH RESULTS ABOUT THE BRAND:
+{search_snapshot[:2500]}
+
+Return ONLY a single valid JSON object (no markdown fences, no explanation) matching this schema:
+
+{{
+  "services": ["<noun phrase>", ...],
+  "usps": ["<specific claim>", ...],
+  "tone_adjectives": ["<word>", ...],
+  "tone_description": "<2-3 sentences describing voice and style>",
+  "tone_perspective": "<first person|third person>",
+  "tone_formality": "<formal|semi-formal|casual>",
+  "brand_keywords": ["<keyword>", ...]
+}}
+
+RULES — READ CAREFULLY:
+services:
+  - 5-10 items
+  - Each MUST be a NOUN PHRASE (2-7 words). NEVER start with a verb.
+  - Good: "AI Language Models (Multilingual)", "Speech Recognition API", "Sovereign Cloud Infrastructure"
+  - Bad: "We provide AI models", "Building language solutions for India"
+  - Include branded product names in parentheses where applicable
+
+usps:
+  - 4-8 items
+  - Must be SPECIFIC and FACTUAL — not generic ("high quality", "great service")
+  - Include numbers, firsts, scale, geography, or technology specifics when available
+  - Example: "India's first sovereign large language model infrastructure"
+
+tone_adjectives: 3-6 single words describing the communication voice
+tone_perspective: EXACTLY "first person" or "third person"
+brand_keywords: 10-20 specific technical or brand terms (product names, methods, tech, etc.)"""
+
+    try:
+        from google import genai as _genai
+        client = _genai.Client(api_key=api_key)
+        resp = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+        )
+        raw = (resp.text or "").strip()
+        # Strip markdown fences if Gemini adds them anyway
+        raw = re.sub(r"^```[a-z]*\n?", "", raw, flags=re.M).rstrip("`").strip()
+        data = json.loads(raw)
+
+        tone = {
+            "adjectives":   data.get("tone_adjectives", []),
+            "description":  data.get("tone_description", ""),
+            "perspective":  data.get("tone_perspective", ""),
+            "formality":    data.get("tone_formality", ""),
+        }
+        print(
+            f"[DNA] AI intel → services:{len(data.get('services',[]))} "
+            f"usps:{len(data.get('usps',[]))} keywords:{len(data.get('brand_keywords',[]))}"
+        )
+        return {
+            "services":       data.get("services", []),
+            "usps":           data.get("usps", []),
+            "tone":           tone,
+            "brand_keywords": data.get("brand_keywords", []),
+            "article_titles": [],  # filled below
+        }
+
+    except Exception as e:
+        print(f"[DNA] AI brand intel Gemini call failed: {e}")
+        return empty
+
+    # (unreachable — article_titles added outside the try block if needed)
+
+
+async def _search_brand_articles(brand_name: str, domain: str) -> list[str]:
+    """
+    Search the internet for articles published by or about the brand.
+    Returns deduplicated list of article titles.
+    """
+    titles: list[str] = []
+    seen: set[str] = set()
+
+    queries = [
+        f'"{brand_name}" blog articles published',
+        f"site:{domain} blog news insights",
+        f"{brand_name} new release update announcement 2024 2025",
+    ]
+
+    _junk_starts = re.compile(
+        r"^(sign|log|home|about|contact|privacy|terms|404|error|welcome to|"
+        r"subscribe|newsletter|cookie|accept)", re.I
+    )
+
+    for q in queries:
+        for r in await _web_search(q, max_results=10):
+            title = (r.get("title") or "").strip()
+            href  = r.get("href") or r.get("url") or ""
+            # Only keep titles that reference the domain directly or look like article headlines
+            if not title or len(title.split()) < 4 or len(title) > 180:
+                continue
+            if _junk_starts.match(title):
+                continue
+            # Prefer results from the brand's own domain or mentioning the brand name
+            is_own_domain = domain in href
+            mentions_brand = brand_name.lower().split()[0] in title.lower() if brand_name else False
+            if not (is_own_domain or mentions_brand):
+                continue
+            key = re.sub(r"\W+", " ", title.lower()).strip()[:70]
+            if key not in seen:
+                seen.add(key)
+                titles.append(title)
+
+    return titles[:20]
+
+
+def _dedup_titles(titles: list[str]) -> list[str]:
+    """Deduplicate article titles by normalized content (case/punct insensitive)."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for t in titles:
+        t = t.strip()
+        if not t or len(t.split()) < 2:
+            continue
+        key = re.sub(r"\W+", " ", t.lower()).strip()[:70]
+        if key not in seen:
+            seen.add(key)
+            result.append(t)
+    return result
 
 
 # ── Core scraping function ─────────────────────────────────────────────────────
@@ -1485,7 +1701,7 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
             if art_text:
                 article_texts.append(art_text[:2000])
 
-        # ── Step 6: Portfolio items ────────────────────────────────────────────
+        # ── Step 5b: Portfolio items ───────────────────────────────────────────
         portfolio_text = page_contents.get("portfolio", "")
         if portfolio_text:
             lines = [l.strip() for l in portfolio_text.split("\n")
@@ -1501,13 +1717,59 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
 
         await browser.close()
 
+    # ── Step 6: AI web search enhancement ─────────────────────────────────────
+    # Uses Gemini + DuckDuckGo to get services, USPs, tone, keywords, articles
+    # that website scraping alone often misses (SPAs, thin homepages, etc.)
+    api_key = os.getenv("GOOGLE_API_KEY", "")
+    ai_intel: dict = {}
+    if api_key:
+        # Run AI intel extraction + article internet search in parallel
+        ai_intel, internet_article_titles = await asyncio.gather(
+            _ai_extract_brand_intel(dna.name, domain, page_contents, api_key),
+            _search_brand_articles(dna.name, domain),
+        )
+    else:
+        internet_article_titles = []
+        print("[DNA] No GOOGLE_API_KEY — skipping AI enhancement")
+
     # ── Build the DNA profile ──────────────────────────────────────────────────
     all_texts = [v for v in page_contents.values() if v and isinstance(v, str)]
 
-    dna.tone_adjectives, dna.tone_sample, dna.avg_sentence_length, dna.uses_first_person = \
-        infer_tone(all_texts)
+    # Tone: always compute sample + sentence length from scraped text,
+    # but use AI adjectives / perspective if available (much more accurate).
+    _regex_adj, _regex_sample, _regex_avg_len, _regex_fp = infer_tone(all_texts)
 
-    dna.top_keywords = extract_keywords_spacy(all_texts + article_texts, top_n=40)
+    ai_tone = ai_intel.get("tone", {})
+    if ai_tone.get("adjectives"):
+        dna.tone_adjectives = ai_tone["adjectives"]
+        print(f"[DNA] Tone (AI): {dna.tone_adjectives}")
+    else:
+        dna.tone_adjectives = _regex_adj
+        print(f"[DNA] Tone (regex): {dna.tone_adjectives}")
+
+    dna.avg_sentence_length = _regex_avg_len
+    # Keep a rich sample sentence from actual page text
+    dna.tone_sample = _regex_sample
+
+    # Perspective from AI ("first person" / "third person") → bool
+    ai_perspective = (ai_tone.get("perspective") or "").lower()
+    if ai_perspective:
+        dna.uses_first_person = "first" in ai_perspective
+    else:
+        dna.uses_first_person = _regex_fp
+
+    # Keywords: merge NLP extraction + AI brand keywords (AI ones go first)
+    nlp_keywords = extract_keywords_spacy(all_texts + article_texts, top_n=40)
+    ai_brand_kw  = ai_intel.get("brand_keywords", [])
+    # Combine: AI brand keywords first, then NLP, deduplicated
+    combined_kw: list[str] = []
+    seen_kw: set[str] = set()
+    for kw in ai_brand_kw + nlp_keywords:
+        kw = kw.strip()
+        if kw and kw.lower() not in seen_kw and len(kw) > 2:
+            seen_kw.add(kw.lower())
+            combined_kw.append(kw)
+    dna.top_keywords = combined_kw[:50]
 
     # Deduplicate accumulated JSON-LD data
     jld_services  = list(dict.fromkeys(s for s in jld_services if s))
@@ -1593,7 +1855,13 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
             if len(dna.services) >= limit:
                 break
 
-    # Tier 1: JSON-LD structured data (most reliable)
+    # Tier 0: AI-extracted services (highest quality — clean noun phrases from Gemini)
+    ai_services = ai_intel.get("services", [])
+    if ai_services:
+        _add_services(ai_services)
+        print(f"[DNA]   Services from AI: {dna.services[:5]}")
+
+    # Tier 1: JSON-LD structured data
     if jld_services:
         _add_services(jld_services)
         print(f"[DNA]   Services from JSON-LD: {dna.services[:5]}")
@@ -1632,11 +1900,19 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
         _add_services(short_phrases, limit=10)
 
     # ── USPs, about, tagline ───────────────────────────────────────────────────
-    # Prioritise about page text for USP extraction (richest source of value props)
     about_text_raw = page_contents.get("about", "")
-    usp_texts = ([about_text_raw] if about_text_raw else []) + all_texts
-    dna.usps = extract_usps(usp_texts)
     dna.about_text = about_text_raw[:2000]
+
+    ai_usps = ai_intel.get("usps", [])
+    if ai_usps:
+        # AI gave us specific, factual USPs — use those
+        dna.usps = ai_usps[:8]
+        print(f"[DNA]   USPs from AI: {dna.usps[:3]}")
+    else:
+        # Fall back to regex pattern matching on scraped text
+        usp_texts = ([about_text_raw] if about_text_raw else []) + all_texts
+        dna.usps = extract_usps(usp_texts)
+        print(f"[DNA]   USPs from regex: {dna.usps[:3]}")
 
     nav_junk = {"skip", "menu", "home", "contact", "about", "login", "sign",
                 "cookie", "accept", "privacy", "toggle", "close", "search", "navigation"}
@@ -1653,7 +1929,8 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
         dna.tagline = dna.description[:150]
 
     # ── Article titles ─────────────────────────────────────────────────────────
-    article_titles = [
+    # Source 1: titles discovered by scraping the website
+    scraped_article_titles = [
         t for t in article_titles
         if "@" not in t
         and not t.lower().startswith("mailto")
@@ -1661,12 +1938,13 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
         and not _is_lorem_ipsum(t)
     ]
 
+    # Source 2: titles from JSON-LD structured data on scraped pages
     clean_jld_articles = [
         t for t in jld_articles
         if len(t.split()) >= 2 and not _is_lorem_ipsum(t)
     ]
 
-    # Case-study metrics — performance agencies only
+    # Source 3: case-study metrics (performance agencies only)
     case_study_titles: list[str] = []
     homepage_combined = dna.homepage_text + " " + page_contents.get("portfolio", "")
     if re.search(
@@ -1690,9 +1968,19 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
                 deduped_cs.append(t)
         case_study_titles = deduped_cs
 
-    dna.existing_article_titles = list(
-        dict.fromkeys(article_titles + clean_jld_articles + case_study_titles)
-    )[:20]
+    # Source 4: internet search results (brand articles published online)
+    # internet_article_titles collected in Step 6 above
+    print(f"[DNA] Article sources — scraped:{len(scraped_article_titles)}, "
+          f"jld:{len(clean_jld_articles)}, internet:{len(internet_article_titles)}")
+
+    # Merge all sources, deduplicate by normalised title, scraped ones first
+    all_article_titles = _dedup_titles(
+        scraped_article_titles
+        + clean_jld_articles
+        + case_study_titles
+        + internet_article_titles
+    )
+    dna.existing_article_titles = all_article_titles[:30]
     dna.portfolio_items = portfolio_items[:10]
 
     # ── Audience ───────────────────────────────────────────────────────────────
@@ -1727,13 +2015,15 @@ async def extract_company_dna(base_url: str) -> CompanyDNA:
             "Getting quality finishes without constant supervision",
         ]
 
-    print(f"\n[DNA] Profile built for: {dna.name}")
-    print(f"  Services found:  {len(dna.services)}")
-    print(f"  Articles found:  {len(dna.existing_article_titles)}")
-    print(f"  Portfolio items: {len(dna.portfolio_items)}")
+    print(f"\n[DNA] ── Profile built for: {dna.name} ──────────────────────────────")
+    print(f"  Services ({len(dna.services)}):   {', '.join(dna.services[:4])}")
+    print(f"  USPs ({len(dna.usps)}):           {dna.usps[0][:80] if dna.usps else '—'}")
+    print(f"  Articles ({len(dna.existing_article_titles)}): "
+          f"{dna.existing_article_titles[0][:65] if dna.existing_article_titles else '—'}")
     print(f"  Locations:       {', '.join(dna.locations[:4])}")
     print(f"  Top keywords:    {', '.join(dna.top_keywords[:8])}")
-    print(f"  Tone:            {', '.join(dna.tone_adjectives)}")
+    print(f"  Tone:            {', '.join(dna.tone_adjectives)}"
+          f"  | {'1st' if dna.uses_first_person else '3rd'} person")
 
     return dna
 
