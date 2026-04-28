@@ -2,35 +2,42 @@ import { useState } from 'react';
 import { SectionHeader, Card, Btn, Spinner, Badge, Tag, ProgressBar } from './components';
 import { researchTrends } from './api';
 
-const SRC_COLOR  = { "Google News": "blue", "DuckDuckGo": "purple" };
-const TYPE_COLOR = { news: "blue", trend: "purple" };
+const SRC_COLOR = { "Google News": "blue", "DuckDuckGo": "purple" };
+
+// Segment display config
+const SEG_CONFIG = {
+  brand_news:     { label: "Brand News",     color: "green",  dot: "#22c55e" },
+  brand_future:   { label: "Brand Future",   color: "amber",  dot: "#f59e0b" },
+  industry_trend: { label: "Industry Trend", color: "blue",   dot: "#3b82f6" },
+  competitive:    { label: "Competitive",    color: "purple", dot: "#a855f7" },
+};
 
 export default function TrendResearchPage({ dna, trends, onTrendsReady }) {
-  const [tab, setTab]         = useState("live");
+  const [tab, setTab]           = useState("live");
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [log, setLog]         = useState([]);
-  const [result, setResult]   = useState(trends || null);
+  const [log, setLog]           = useState([]);
+  const [result, setResult]     = useState(trends || null);
   const [expanded, setExpanded] = useState(null);
-  const [filter, setFilter]   = useState("all");
-  const [error, setError]     = useState(null);
+  const [filter, setFilter]     = useState("all");
+  const [error, setError]       = useState(null);
 
   async function scan() {
     if (!dna) return;
     setScanning(true); setProgress(0); setLog([]); setResult(null); setError(null);
 
-    // Animate log while API runs
     const logSteps = [
-      { t: "info", msg: `[trends] Scanning industry signals for: ${dna.name}` },
-      { t: "req",  msg: "[trends] Google News RSS — fetching real-time headlines…" },
-      { t: "req",  msg: "[trends] DuckDuckGo — querying web search…" },
+      { t: "info", msg: `[trends] Starting research for: ${dna.name}` },
+      { t: "req",  msg: `[trends] Searching brand activity — what ${dna.name} has done & plans…` },
+      { t: "req",  msg: "[trends] Google News RSS — fetching real-time industry headlines…" },
+      { t: "req",  msg: "[trends] DuckDuckGo — querying broader web context…" },
       { t: "info", msg: "[trends] Deduplicating and scoring relevance…" },
-      { t: "info", msg: "[trends] Generating article angles…" },
+      { t: "info", msg: "[trends] Gemini AI — classifying segments & generating brand-aware angles…" },
     ];
     let i = 0;
     const iv = setInterval(() => {
       if (i < logSteps.length) {
-        const step = logSteps[i];          // capture value NOW, before i increments
+        const step = logSteps[i];
         const pct  = Math.round(((i + 1) / logSteps.length) * 80);
         i++;
         setLog(prev => [...prev, step]);
@@ -38,25 +45,26 @@ export default function TrendResearchPage({ dna, trends, onTrendsReady }) {
       } else {
         clearInterval(iv);
       }
-    }, 400);
+    }, 500);
 
     try {
       const report = await researchTrends({
-        services: dna.services,
-        top_keywords: dna.top_keywords,
+        services:        dna.services,
+        top_keywords:    dna.top_keywords,
         existing_titles: dna.existing_article_titles || [],
+        brand_name:      dna.name  || '',
+        domain:          dna.domain || '',
       });
       clearInterval(iv);
+      const segCounts = report.segments || {};
       setLog(prev => [
         ...prev,
-        { t: "ok", msg: `[trends] Found ${report.trends.length} relevant trends` },
+        { t: "ok", msg: `[trends] ${report.trends.length} trends found` },
+        { t: "ok", msg: `[trends] Segments — brand:${(segCounts.brand_news||0)+(segCounts.brand_future||0)} industry:${segCounts.industry_trend||0} competitive:${segCounts.competitive||0}` },
         { t: "ok", msg: `[trends] ${report.article_angles.length} article angles generated` },
       ]);
       setProgress(100);
-      setTimeout(() => {
-        setResult(report);
-        setScanning(false);
-      }, 400);
+      setTimeout(() => { setResult(report); setScanning(false); }, 400);
     } catch (e) {
       clearInterval(iv);
       setError(e.message);
@@ -65,7 +73,17 @@ export default function TrendResearchPage({ dna, trends, onTrendsReady }) {
   }
 
   const logColor = { req: "var(--accent)", info: "var(--text-2)", ok: "var(--green)" };
-  const filtered = result?.trends?.filter(t => filter === "all" || t.trend_type === filter) || [];
+
+  const FILTER_TABS = [
+    { id: "all",            label: "All" },
+    { id: "brand_news",     label: "Brand News" },
+    { id: "brand_future",   label: "Brand Future" },
+    { id: "industry_trend", label: "Industry" },
+    { id: "competitive",    label: "Competitive" },
+  ];
+  const filtered = result?.trends?.filter(t =>
+    filter === "all" || t.segment === filter
+  ) || [];
 
   return (
     <div>
@@ -128,10 +146,13 @@ export default function TrendResearchPage({ dna, trends, onTrendsReady }) {
 
           {result && (
             <div>
+              {/* Header row */}
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
                 <Badge color="green">{result.trends.length} trends</Badge>
                 <Badge color="blue">{result.industry}</Badge>
-                <Badge color="gray">{result.key_themes?.length} themes</Badge>
+                {result.segments?.brand_news > 0 && <Badge color="green">{result.segments.brand_news} brand news</Badge>}
+                {result.segments?.brand_future > 0 && <Badge color="amber">{result.segments.brand_future} brand future</Badge>}
+                {result.segments?.competitive > 0 && <Badge color="purple">{result.segments.competitive} competitive</Badge>}
                 <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--text-4)", fontFamily: "var(--font-mono)" }}>
                   {new Date(result.generated_at).toLocaleTimeString()}
                 </span>
@@ -141,21 +162,50 @@ export default function TrendResearchPage({ dna, trends, onTrendsReady }) {
                 </Btn>
               </div>
 
+              {/* Brand summary box */}
+              {result.brand_summary && (
+                <Card style={{ marginBottom: 16, borderColor: "var(--badge-green-border)", background: "var(--badge-green-bg)" }}>
+                  <p style={{ margin: "0 0 4px", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--green)", fontFamily: "var(--font-mono)" }}>
+                    Brand Trajectory
+                  </p>
+                  <p style={{ margin: 0, fontSize: 13, color: "var(--text)", lineHeight: 1.6 }}>{result.brand_summary}</p>
+                </Card>
+              )}
+
+              {/* Key themes */}
               <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 14 }}>
                 {result.key_themes?.map(t => <Tag key={t}>{t}</Tag>)}
               </div>
 
-              <div style={{ display: "flex", gap: 5, marginBottom: 14 }}>
-                {["all", "news", "trend"].map(f => (
-                  <Tag key={f} active={filter === f} onClick={() => setFilter(f)}>{f}</Tag>
-                ))}
+              {/* Segment filter tabs */}
+              <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 14 }}>
+                {FILTER_TABS.map(f => {
+                  const seg = SEG_CONFIG[f.id];
+                  const isActive = filter === f.id;
+                  return (
+                    <button key={f.id} onClick={() => setFilter(f.id)} style={{
+                      padding: "4px 11px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer",
+                      border: `1px solid ${isActive && seg ? seg.dot : "var(--border)"}`,
+                      background: isActive ? (seg ? seg.dot + "22" : "var(--surface-2)") : "transparent",
+                      color: isActive && seg ? seg.dot : "var(--text-3)",
+                      transition: "all 0.15s",
+                    }}>
+                      {seg && <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: seg.dot, marginRight: 5, verticalAlign: "middle" }} />}
+                      {f.label}
+                    </button>
+                  );
+                })}
               </div>
 
+              {/* Trends list */}
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {filtered.map((t, i) => (
+                {filtered.map((t, i) => {
+                  const segCfg = SEG_CONFIG[t.segment] || SEG_CONFIG.industry_trend;
+                  return (
                   <div key={i} onClick={() => setExpanded(expanded === i ? null : i)} style={{
                     background: expanded === i ? "var(--surface-2)" : "var(--surface)",
-                    border: `1px solid ${expanded === i ? "var(--border-hover)" : "var(--border)"}`,
+                    border: `1px solid ${expanded === i ? segCfg.dot + "66" : "var(--border)"}`,
+                    borderLeft: `3px solid ${segCfg.dot}`,
                     borderRadius: 10, padding: "13px 16px", cursor: "pointer", transition: "all 0.15s",
                   }}>
                     <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
@@ -173,7 +223,7 @@ export default function TrendResearchPage({ dna, trends, onTrendsReady }) {
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5, flexWrap: "wrap" }}>
-                          <Badge color={TYPE_COLOR[t.trend_type] || "gray"} size="xs">{t.trend_type}</Badge>
+                          <Badge color={segCfg.color} size="xs">{segCfg.label}</Badge>
                           <Badge color={SRC_COLOR[t.source] || "gray"} size="xs">{t.source}</Badge>
                           {t.published && <span style={{ fontSize: 10, color: "var(--text-4)", fontFamily: "var(--font-mono)" }}>{t.published}</span>}
                         </div>
@@ -185,7 +235,8 @@ export default function TrendResearchPage({ dna, trends, onTrendsReady }) {
                       <span style={{ fontSize: 11, color: "var(--text-4)", flexShrink: 0, marginTop: 2 }}>{expanded === i ? "▲" : "▼"}</span>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
 
               {result.article_angles?.length > 0 && (

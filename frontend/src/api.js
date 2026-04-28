@@ -37,8 +37,14 @@ async function del(path) {
 export const extractDNA = (url) =>
   post('/api/extract-dna', { url });
 
-export const researchTrends = ({ services, top_keywords, existing_titles }) =>
-  post('/api/research-trends', { services, top_keywords, existing_titles: existing_titles || [] });
+export const researchTrends = ({ services, top_keywords, existing_titles, brand_name, domain }) =>
+  post('/api/research-trends', {
+    services,
+    top_keywords,
+    existing_titles: existing_titles || [],
+    brand_name: brand_name || '',
+    domain: domain || '',
+  });
 
 export const buildBrief = ({ dna, trend, angle, article_type }) =>
   post('/api/build-brief', { dna, trend, angle, article_type });
