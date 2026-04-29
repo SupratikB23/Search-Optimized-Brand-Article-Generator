@@ -507,7 +507,3 @@ Every engine output is also written to disk under `clients/{slug}/` for easy acc
 - The `clients/` directory is git-ignored. All client data is local to your machine.
 
 ---
-
-## License
-
-MIT
