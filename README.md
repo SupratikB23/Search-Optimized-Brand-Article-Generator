@@ -195,3 +195,9 @@ The Vite dev server runs on `http://localhost:5173` and proxies API calls to `ht
 
 ---
 
+## Documentation
+
+> For architecture diagrams, full API reference, database schema, pipeline details, and development notes — <br>
+> **[View the full technical documentation in DOCS.md →](./DOCS.md)**
+
+---
