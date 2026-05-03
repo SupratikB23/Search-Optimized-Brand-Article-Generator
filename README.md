@@ -35,91 +35,17 @@ The system manages multiple clients. Each client's full pipeline output - DNA, t
 
 ## The Four Engines
 
-### Engine 01 - Brand DNA Extractor
+**Engine 01 – Brand DNA Extractor** <br>
+Scrapes a brand's website across up to 60 pages using Playwright + BFS crawling, mines JSON-LD structured data, runs DuckDuckGo searches, and synthesizes everything into a structured brand profile via Gemini.
 
-Builds a complete intelligence profile of a brand from its website and the open web.
+**Engine 02 – Live Trend Research** <br>
+Pulls real-time signals from Google News RSS and DuckDuckGo, then uses Gemini to classify each result into one of four segments: `brand_news`, `brand_future`, `industry_trend`, `competitive`. Outputs 10–14 ready-to-write article angles.
 
-**Scraping pipeline:**
+**Engine 03 – Article Brief Builder** <br>
+Runs gap analysis between existing brand coverage and incoming trends. Produces a structured brief with SEO, AEO, and GEO scores assigned before a word is written.
 
-1. Sitemap XML parse - fast, no browser, most reliable source of URLs
-2. BFS URL discovery via `httpx` - discovers up to 60 pages at depth 3 without a browser
-3. JSON-LD structured data mining - extracts services, articles, locations from `<script type="application/ld+json">` blocks
-4. Playwright full-render scraping with:
-   - `networkidle` wait + `domcontentloaded` fallback + body text polling (8 s)
-   - Accordion / `<details>` / Bootstrap collapse expansion
-   - Tab panel clicking (up to 5 tabs)
-   - Load More button clicking (up to 3 times)
-   - Shadow DOM text piercing via `document.createTreeWalker`
-   - Same-domain iframe content extraction
-   - Raw HTML `httpx` fallback when JS yields fewer than 200 characters
-5. Web search via DuckDuckGo DDGS - searches for brand services, differentiators, and published articles across the open web
-6. Gemini AI synthesis - classifies all scraped and searched content into structured outputs
-
-**Output fields:**
-
-| Field | Description |
-|---|---|
-| `services` | Clean noun phrases (2-7 words each) - e.g. "Speech Recognition API", "Indic Language Models (Sarvam-1)" |
-| `tone_adjectives` | AI-classified voice descriptors - e.g. "technical", "mission-driven", "confident" |
-| `tone_sample` | Representative sentence extracted from actual page text |
-| `uses_first_person` | Boolean derived from AI perspective classification |
-| `usps` | Specific, factual differentiators with numbers and firsts where available |
-| `existing_article_titles` | Merged from 4 sources: scraped links, JSON-LD, case-study metrics, internet search |
-| `top_keywords` | AI brand keywords prepended to NLP-extracted noun chunks (up to 50) |
-| `locations` | Cities and regions from JSON-LD + text pattern matching |
-
----
-
-### Engine 02 - Live Trend Research
-
-Pulls real-time signals from the open web and classifies them into four segments relative to the brand.
-
-**Sources:**
-- Google News RSS - zero cost, real-time headlines
-- DuckDuckGo DDGS - broader web context, no API key required
-- Brand-specific searches - what the brand has done recently and what it is planning
-
-**Segments:**
-
-| Segment | Description |
-|---|---|
-| `brand_news` | Recent launches, releases, and announcements by the brand |
-| `brand_future` | Forward-looking signals - roadmap, upcoming features, stated plans |
-| `industry_trend` | Broad market and technology trends in the brand's space |
-| `competitive` | Competitor moves and market positioning signals |
-
-**AI layer:** Gemini re-classifies every collected item into the correct segment, writes a 2-sentence brand trajectory summary, and generates 10-14 brand-specific article angles - not fill-in templates, but ready-to-write titles connecting brand activity to industry movement.
-
-**Fallback:** All queries target 2026. If fewer than 8 results are returned, the engine automatically supplements with the same queries targeting 2025.
-
----
-
-### Engine 03 - Article Brief Builder
-
-Runs gap analysis between the brand's existing article coverage and the incoming trend signal. Produces a structured brief with SEO, AEO, and GEO scores assigned to each proposed angle before a word is written.
-
-**Brief structure:**
-- Working title and primary angle
-- Target keyword cluster
-- Recommended article type (educational / listicle / case study / opinion)
-- SEO score, AEO score, GEO score (0-100 each)
-- Suggested outline and talking points
-- Brand voice guidance derived from Engine 01
-
----
-
-### Engine 04 - Article Writer
-
-Takes the brief and the full brand DNA and writes a complete article in the brand's voice.
-
-**Model routing:**
-- Primary: Gemini 2.0 Flash (`gemini-2.0-flash`)
-- Fallback: Groq (when Gemini is rate-limited or unavailable)
-
-**Quality controls:**
-- Banned phrase filter - rejects output containing AI cliches ("in today's fast-paced", "delve into", "it goes without saying", etc.)
-- SEO / AEO / GEO score computed on the final article
-- All scores persisted to the database alongside the article
+**Engine 04 – Article Writer** <br>
+Writes a complete article in the brand's voice using the brief and Brand DNA as context. Routes between Gemini 2.0 Flash (primary) and Groq (fallback). Filters AI clichés and computes final scores.
 
 ---
 
