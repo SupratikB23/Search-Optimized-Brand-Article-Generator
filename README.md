@@ -201,3 +201,7 @@ The Vite dev server runs on `http://localhost:5173` and proxies API calls to `ht
 > **[View the full technical documentation in DOCS.md →](./DOCS.md)**
 
 ---
+
+## Architecture Diagram
+
+<img width="1600" height="1529" alt="brandscope_architecture" src="https://github.com/user-attachments/assets/2fdeafc0-cc24-459d-8f50-eba254ecd105" />
